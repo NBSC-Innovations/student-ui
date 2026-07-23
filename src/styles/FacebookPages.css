@@ -1,0 +1,73 @@
+.fb-pages {
+  margin-top: 4px;
+}
+
+.fb-pages__heading {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-h);
+  text-align: center;
+  margin: 0 0 6px;
+}
+
+.fb-pages__subtext {
+  font-size: 14px;
+  color: #64748b;
+  text-align: center;
+  margin: 0 0 28px;
+}
+
+.fb-pages__category {
+  margin-bottom: 28px;
+}
+
+.fb-pages__category-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--nbsc-blue-500);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fb-pages__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.fb-page-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-decoration: none;
+  color: var(--text-h);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+}
+
+.fb-page-card:hover {
+  box-shadow: 0 6px 18px rgba(15, 40, 84, 0.12);
+  border-color: var(--nbsc-blue-500);
+  transform: translateY(-2px);
+}
+
+.fb-page-card__logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--bg-app);
+}
+
+.fb-page-card__name {
+  font-size: 14px;
+  font-weight: 600;     
+  line-height: 1.35;
+}

@@ -1,121 +1,84 @@
 import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import Sidebar, { navItems } from './components/Sidebar.jsx'
+import Dashboard from './pages/Dashboard.jsx'
 import './App.css'
 
+function MenuIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  )
+}
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [activePage, setActivePage] = useState('dashboard')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const handleNavigate = (id) => {
+    setActivePage(id)
+    setSidebarOpen(false)
+  }
+
+  const handleLogout = () => {
+    // TODO: wire up actual logout logic
+    console.log('Logout clicked')
+  }
+
+  const currentLabel = navItems.find((item) => item.id === activePage)?.label ?? ''
+
+  const renderPage = () => {
+    switch (activePage) {
+      case 'dashboard':
+        return <Dashboard />
+      // case 'find-gc':
+      //   return <FindGc />
+      // case 'group-chats':
+      //   return <GroupChats />
+      // case 'profile':
+      //   return <Profile />
+      default:
+        return <Dashboard />
+    }
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app-layout">
+      <Sidebar
+        activePage={activePage}
+        onNavigate={handleNavigate}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        onLogout={handleLogout}
+      />
 
-      <div className="ticks"></div>
+      <div className="main-content">
+        <header className="topbar">
+          <div className="topbar__brand">
+            <div className="topbar__logo">NBSC</div>
+            <span className="topbar__brand-text">NBSC SIS</span>
+          </div>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          <h1 className="topbar__title">{currentLabel}</h1>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <button
+            type="button"
+            className="topbar__burger"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+          >
+            <MenuIcon width={20} height={20} />
+          </button>
+        </header>
+
+        <main className="content-area">
+          {renderPage()}
+        </main>
+      </div>
+    </div>
   )
 }
 
