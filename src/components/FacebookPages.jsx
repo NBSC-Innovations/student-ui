@@ -32,7 +32,7 @@ function FacebookPages() {
 
   return (
     <section className="fb-pages">
-      <h2 className="fb-pages__heading">Official NBSC Facebook Pages</h2>
+      <h2 className="fb-pages__heading">Official Northern Bukidnon State College Facebook Pages</h2>
       <p className="fb-pages__subtext">
         Follow these pages to stay updated on announcements, events, and activities.
       </p>
