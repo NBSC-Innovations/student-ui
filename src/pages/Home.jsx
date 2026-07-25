@@ -1,6 +1,4 @@
 import { useState, useRef } from 'react'
-import { createWorker } from 'tesseract.js'
-import { parseCorText } from '../utils/corParser'
 import '../styles/Home.css'
 
 function UploadIcon(props) {
@@ -53,13 +51,12 @@ function SendIcon(props) {
   )
 }
 
-// view: 'prompt' -> 'upload' -> 'processing' -> 'review' -> 'chats' -> 'thread'
-
 function Home() {
   const [view, setView] = useState('prompt')
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
+  const [studentName, setStudentName] = useState('')
   const [subjects, setSubjects] = useState([])
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
@@ -81,40 +78,57 @@ function Home() {
     handleFileSelect(e.dataTransfer.files?.[0])
   }
 
+  // Reads Server-Sent Events from FastAPI stream endpoint (http://localhost:8000/api/scan-cor-stream)
   const runOcr = async () => {
-    if (!imageFile) return
-    setView('processing')
-    setProgress(0)
-    setError('')
+  if (!imageFile) return
+  setView('processing')
+  setProgress(10)
+  setError('')
 
-    try {
-      const worker = await createWorker('eng', 1, {
-        logger: (m) => {
-          if (m.status === 'recognizing text') {
-            setProgress(Math.round(m.progress * 100))
-          }
-        },
-      })
+  // Smoothly increment progress bar up to 90% while waiting for Python
+  const timer = setInterval(() => {
+    setProgress((prev) => (prev < 90 ? prev + Math.floor(Math.random() * 8) + 3 : 90))
+  }, 200)
 
-      const { data } = await worker.recognize(imageFile)
-      await worker.terminate()
+  try {
+    const formData = new FormData()
+    formData.append('file', imageFile)
 
-      const parsed = parseCorText(data.text)
+    const response = await fetch('http://localhost:8000/api/scan-cor', {
+      method: 'POST',
+      body: formData,
+    })
 
-      if (parsed.length === 0) {
-        setError(
-          'No subjects could be detected from this image. Try a clearer photo/scan, or add subjects manually below.'
-        )
-      }
-
-      setSubjects(parsed)
-      setView('review')
-    } catch (err) {
-      console.error(err)
-      setError('Something went wrong while reading the image. Please try again.')
-      setView('upload')
+    if (!response.ok) {
+      throw new Error('Failed to parse document on backend server.')
     }
+
+    const data = await response.json()
+
+    clearInterval(timer)
+    setProgress(100)
+
+    setStudentName(data.name || '')
+    setSubjects(data.subjects || [])
+
+    if (data.image_preview) {
+      setImagePreview(data.image_preview)
+    }
+
+    if (!data.subjects || data.subjects.length === 0) {
+      setError('No subjects could be detected from this image. Please check or add subjects manually.')
+    }
+
+    setTimeout(() => {
+      setView('review')
+    }, 250)
+  } catch (err) {
+    clearInterval(timer)
+    console.error(err)
+    setError('Failed to scan COR. Make sure your Python backend server is running on port 8000.')
+    setView('upload')
   }
+}
 
   const updateSubject = (id, field, value) => {
     setSubjects((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)))
@@ -127,7 +141,7 @@ function Home() {
   const addSubjectManually = () => {
     setSubjects((prev) => [
       ...prev,
-      { id: `manual-${Date.now()}`, code: '', description: '', section: '', rawLine: '' },
+      { id: `manual-${Date.now()}`, code: '', description: '' },
     ])
   }
 
@@ -139,6 +153,7 @@ function Home() {
     setView('upload')
     setImageFile(null)
     setImagePreview(null)
+    setStudentName('')
     setSubjects([])
     setError('')
     setProgress(0)
@@ -177,27 +192,27 @@ function Home() {
       )}
 
       {view === 'upload' && (
-  <div className="home__card">
-    <div className="home__upload-header">
-      <button
-        type="button"
-        className="home__back-link"
-        onClick={() => {
-          setImageFile(null)
-          setImagePreview(null)
-          setError('')
-          setView('prompt')
-        }}
-      >
-        <BackIcon width={16} height={16} />
-        Cancel
-      </button>
-    </div>
+        <div className="home__card">
+          <div className="home__upload-header">
+            <button
+              type="button"
+              className="home__back-link"
+              onClick={() => {
+                setImageFile(null)
+                setImagePreview(null)
+                setError('')
+                setView('prompt')
+              }}
+            >
+              <BackIcon width={16} height={16} />
+              Cancel
+            </button>
+          </div>
 
-    <h2 className="home__title">Upload Your Certificate of Registration</h2>
-    <p className="home__subtitle">
-      We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
-    </p>
+          <h2 className="home__title">Upload Your Certificate of Registration</h2>
+          <p className="home__subtitle">
+            We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
+          </p>
 
           <div
             className="home__dropzone"
@@ -239,8 +254,8 @@ function Home() {
       {view === 'processing' && (
         <div className="home__card home__card--center">
           <div className="home__spinner" />
-          <h2 className="home__title">Reading your COR...</h2>
-          <p className="home__subtitle">This may take a few seconds.</p>
+          <h2 className="home__title">Processing your COR...</h2>
+          <p className="home__subtitle">Running OpenCV preprocessing & OCR analysis.</p>
           <div className="home__progress-track">
             <div className="home__progress-fill" style={{ width: `${progress}%` }} />
           </div>
@@ -250,69 +265,93 @@ function Home() {
 
       {view === 'review' && (
         <div className="home__card">
-          <h2 className="home__title">Confirm Your Subjects</h2>
-          <p className="home__subtitle">
-            Double-check what we found. Fix any misreads or add subjects we missed.
-          </p>
+          <div className="home__review-header">
+            <h2 className="home__title">Verify Extracted Details</h2>
+            <p className="home__subtitle">
+              Compare the extracted text below against your uploaded document.
+            </p>
+          </div>
 
           {error && <p className="home__error">{error}</p>}
 
-          <div className="home__table">
-            <div className="home__table-header">
-              <span>Subject Code</span>
-              <span>Description</span>
-              <span>Section</span>
-              <span></span>
+          <div className="home__review-stacked">
+            {/* TOP PANEL: Uploaded Document */}
+            <div className="home__preview-panel">
+              <span className="home__panel-title">Uploaded Document</span>
+              {imagePreview && (
+                <div className="home__image-wrapper">
+                  <img src={imagePreview} alt="Uploaded COR" className="home__cor-image" />
+                </div>
+              )}
             </div>
 
-            {subjects.map((subject) => (
-              <div key={subject.id} className="home__table-row">
+            {/* BOTTOM PANEL: Editable Verification Form */}
+            <div className="home__form-panel">
+              <div className="home__field-group">
+                <label className="home__label">Student Name</label>
                 <input
                   type="text"
-                  value={subject.code}
-                  onChange={(e) => updateSubject(subject.id, 'code', e.target.value)}
-                  placeholder="e.g. IT101"
+                  className="home__input"
+                  value={studentName}
+                  onChange={(e) => setStudentName(e.target.value)}
+                  placeholder="e.g. COMING, KATELYN L."
                 />
-                <input
-                  type="text"
-                  value={subject.description}
-                  onChange={(e) => updateSubject(subject.id, 'description', e.target.value)}
-                  placeholder="Subject title"
-                />
-                <input
-                  type="text"
-                  value={subject.section}
-                  onChange={(e) => updateSubject(subject.id, 'section', e.target.value)}
-                  placeholder="e.g. 3A"
-                />
+              </div>
+
+              <span className="home__panel-title" style={{ marginTop: '16px' }}>
+                Enrolled Subjects
+              </span>
+              <div className="home__table">
+                <div className="home__table-header">
+                  <span>Code</span>
+                  <span>Description</span>
+                  <span></span>
+                </div>
+
+                {subjects.map((subject) => (
+                  <div key={subject.id} className="home__table-row">
+                    <input
+                      type="text"
+                      value={subject.code}
+                      onChange={(e) => updateSubject(subject.id, 'code', e.target.value)}
+                      placeholder="Code"
+                    />
+                    <input
+                      type="text"
+                      value={subject.description}
+                      onChange={(e) => updateSubject(subject.id, 'description', e.target.value)}
+                      placeholder="Description"
+                    />
+                    <button
+                      type="button"
+                      className="home__row-remove"
+                      onClick={() => removeSubject(subject.id)}
+                      aria-label="Remove subject"
+                    >
+                      <TrashIcon width={16} height={16} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <button type="button" className="home__add-row" onClick={addSubjectManually}>
+                + Add missing subject
+              </button>
+
+              <div className="home__actions">
+                <button type="button" className="home__btn home__btn--secondary" onClick={startOver}>
+                  Re-upload Photo
+                </button>
                 <button
                   type="button"
-                  className="home__row-remove"
-                  onClick={() => removeSubject(subject.id)}
-                  aria-label="Remove subject"
+                  className="home__btn home__btn--primary"
+                  onClick={confirmSubjects}
+                  disabled={subjects.length === 0}
                 >
-                  <TrashIcon width={16} height={16} />
+                  Confirm & Join Group Chats
                 </button>
               </div>
-            ))}
-          </div>
-
-          <button type="button" className="home__add-row" onClick={addSubjectManually}>
-            + Add subject manually
-          </button>
-
-          <div className="home__actions">
-            <button type="button" className="home__btn home__btn--secondary" onClick={startOver}>
-              Start Over
-            </button>
-            <button
-              type="button"
-              className="home__btn home__btn--primary"
-              onClick={confirmSubjects}
-              disabled={subjects.length === 0}
-            >
-              Confirm & Join Group Chats
-            </button>
+            </div>
           </div>
         </div>
       )}
@@ -339,10 +378,7 @@ function Home() {
                 </div>
                 <div className="home__gc-info">
                   <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-                  <span className="home__gc-desc">
-                    {subject.description}
-                    {subject.section && ` · ${subject.section}`}
-                  </span>
+                  <span className="home__gc-desc">{subject.description}</span>
                 </div>
               </button>
             ))}

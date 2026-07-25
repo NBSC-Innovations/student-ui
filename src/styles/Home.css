@@ -13,6 +13,7 @@
 .home__card--center {
   text-align: center;
 }
+
 .home__upload-header {
   margin-bottom: 16px;
 }
@@ -183,6 +184,83 @@
   margin-top: 6px;
 }
 
+/* ── Stacked Verification Layout ── */
+
+.home__review-header {
+  margin-bottom: 20px;
+}
+
+.home__review-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.home__panel-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+.home__preview-panel {
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  /* REMOVED position: sticky & top: 20px */
+}
+
+.home__image-wrapper {
+  max-height: 360px; /* Clean height for document preview */
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.home__cor-image {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.home__form-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.home__field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.home__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.home__input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-h);
+}
+
+.home__input:focus {
+  outline: none;
+  border-color: var(--nbsc-blue-500);
+}
+
 .home__table {
   display: flex;
   flex-direction: column;
@@ -192,7 +270,7 @@
 
 .home__table-header {
   display: grid;
-  grid-template-columns: 110px 1fr 90px 32px;
+  grid-template-columns: 120px 1fr 32px;
   gap: 8px;
   font-size: 12px;
   font-weight: 700;
@@ -204,7 +282,7 @@
 
 .home__table-row {
   display: grid;
-  grid-template-columns: 110px 1fr 90px 32px;
+  grid-template-columns: 120px 1fr 32px;
   gap: 8px;
   align-items: center;
 }
@@ -251,6 +329,7 @@
   cursor: pointer;
   padding: 6px 2px;
   margin-bottom: 20px;
+  text-align: left;
 }
 
 .home__add-row:hover {
