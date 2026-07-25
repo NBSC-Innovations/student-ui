@@ -1,11 +1,11 @@
 import FacebookPages from '../components/FacebookPages.jsx'
 
-function Dashboard() {
+function Pages() {
   return (
-    <div className="dashboard">
+    <div className="pages">
       <FacebookPages />
     </div>
   )
 }
 
-export default Dashboard
+export default Pages

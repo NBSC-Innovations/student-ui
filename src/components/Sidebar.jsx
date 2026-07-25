@@ -1,32 +1,21 @@
 import '../styles/Sidebar.css'
 
-function DashboardIcon(props) {
+function HomeIcon(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
       strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <rect x="3" y="3" width="7" height="9" rx="1.5" />
-      <rect x="14" y="3" width="7" height="5" rx="1.5" />
-      <rect x="14" y="12" width="7" height="9" rx="1.5" />
-      <rect x="3" y="16" width="7" height="5" rx="1.5" />
+      <path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z" />
     </svg>
   )
 }
 
-function FindGcIcon(props) {
+function PagesIcon(props) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
       strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <circle cx="11" cy="11" r="7" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  )
-}
-
-function GroupChatsIcon(props) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <line x1="3" y1="9" x2="21" y2="9" />
+      <line x1="8" y1="4" x2="8" y2="9" />
     </svg>
   )
 }
@@ -54,9 +43,8 @@ function LogoutIcon(props) {
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const navItems = [
-  { id: 'dashboard', label: 'Dashboard', icon: DashboardIcon },
-  { id: 'find-gc', label: 'Find Group Chat', icon: FindGcIcon },
-  { id: 'group-chats', label: 'Group Chats', icon: GroupChatsIcon },
+  { id: 'home', label: 'Home', icon: HomeIcon },
+  { id: 'pages', label: 'Pages', icon: PagesIcon },
   { id: 'profile', label: 'Profile', icon: ProfileIcon },
 ]
 

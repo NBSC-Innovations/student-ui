@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import Sidebar, { navItems } from './components/Sidebar.jsx'
-import Dashboard from './pages/Dashboard.jsx'
+import Home from './pages/Home.jsx'
+import Pages from './pages/Pages.jsx'
 import './App.css'
 
 function MenuIcon(props) {
@@ -15,7 +16,7 @@ function MenuIcon(props) {
 }
 
 function App() {
-  const [activePage, setActivePage] = useState('dashboard')
+  const [activePage, setActivePage] = useState('home')
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const handleNavigate = (id) => {
@@ -24,7 +25,6 @@ function App() {
   }
 
   const handleLogout = () => {
-    // TODO: wire up actual logout logic
     console.log('Logout clicked')
   }
 
@@ -32,16 +32,14 @@ function App() {
 
   const renderPage = () => {
     switch (activePage) {
-      case 'dashboard':
-        return <Dashboard />
-      // case 'find-gc':
-      //   return <FindGc />
-      // case 'group-chats':
-      //   return <GroupChats />
+      case 'home':
+        return <Home />
+      case 'pages':
+        return <Pages />
       // case 'profile':
       //   return <Profile />
       default:
-        return <Dashboard />
+        return <Home />
     }
   }
 
