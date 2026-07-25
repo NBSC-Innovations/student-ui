@@ -18,7 +18,18 @@
 }
 
 .fb-pages__category {
-  margin-bottom: 28px;
+  margin-top: 28px;
+}
+
+.fb-pages__category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
 .fb-pages__category-title {
@@ -30,6 +41,82 @@
   margin: 0 0 12px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--border);
+}
+
+.fb-pages__category-row .fb-pages__category-title {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.fb-pages__search {
+  position: relative;
+  width: 260px;
+}
+
+.fb-pages__search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 17px;
+  height: 17px;
+  color: #94a3b8;
+  pointer-events: none;
+}
+
+.fb-pages__search-input {
+  width: 100%;
+  padding: 9px 36px 9px 38px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  color: var(--text-h);
+  background: #fff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.fb-pages__search-input:focus {
+  outline: none;
+  border-color: var(--nbsc-blue-500);
+  box-shadow: 0 0 0 3px rgba(15, 40, 84, 0.12);
+}
+
+.fb-pages__search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  border-radius: 50%;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.fb-pages__search-clear:hover {
+  background: var(--nbsc-blue-100);
+  color: var(--nbsc-blue-700);
+}
+
+.fb-pages__search-clear svg {
+  width: 14px;
+  height: 14px;
+}
+.fb-pages__empty {
+  font-size: 14px;
+  color: #64748b;
+  text-align: center;
+  padding: 32px 0;
+  margin: 0;
 }
 
 .fb-pages__grid {
@@ -68,6 +155,17 @@
 
 .fb-page-card__name {
   font-size: 14px;
-  font-weight: 600;     
+  font-weight: 600;
   line-height: 1.35;
+}
+
+@media (max-width: 640px) {
+  .fb-pages__search {
+    width: 100%;
+  }
+
+  .fb-pages__category-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
