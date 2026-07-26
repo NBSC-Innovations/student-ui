@@ -8,7 +8,6 @@ import pandas as pd
 from PIL import Image, ImageOps
 import pytesseract
 
-# Point to your local Tesseract executable
 TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
 
@@ -67,7 +66,13 @@ def load_image_from_bytes(file_bytes):
 def get_ocr_dataframe_from_cv2(image):
   gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
   h, w = gray.shape[:2]
-  resized = cv2.resize(gray, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
+
+  # Upscale image if necessary for sharper OCR resolution
+  target_w = max(w * 2, 1600)
+  scale = target_w / w
+  resized = cv2.resize(
+      gray, (target_w, int(h * scale)), interpolation=cv2.INTER_CUBIC
+  )
 
   data = pytesseract.image_to_data(
       resized, output_type=pytesseract.Output.DATAFRAME, config='--oem 1 --psm 6'
@@ -82,7 +87,7 @@ def get_ocr_dataframe_from_cv2(image):
   return data
 
 
-def group_text_into_lines(df, y_tolerance=10):
+def group_text_into_lines(df, y_tolerance=14):
   if df.empty:
     return []
 
@@ -124,7 +129,7 @@ def extract_student_name(lines):
           found_label = True
           continue
         if found_label:
-          if w['text'].lower() in [':', 'student', 'section']:
+          if w['text'].lower() in [':', 'student', 'section', 'course', 'id']:
             continue
           name_words.append(w['text'])
           if w['conf'] > 0:
@@ -132,25 +137,78 @@ def extract_student_name(lines):
 
       if name_words:
         name = ' '.join(name_words)
-        name = re.sub(r'[^A-Za-z,\s]', '', name).strip()
+        name = re.sub(r'[^A-Za-z,\s\.]', '', name).strip()
+        name = re.sub(r'\s+', ' ', name)
         name_conf = sum(confs) / len(confs) if confs else 0.0
         break
 
   return name, name_conf
 
 
+def clean_subject_description(text):
+  if not text:
+    return ''
+
+  # 1. Common word-level OCR typo replacements (kept minimal and exact)
+  ocr_typo_fixes = {
+      r'\bRetum\b': 'Return',
+      r'\bEthic\b': 'Ethics',
+  }
+  for pattern, replacement in ocr_typo_fixes.items():
+    text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+  # 2. Clean trailing noise characters (e.g. ':', '-', '|', '.')
+  text = re.sub(r'[:\-\|\.]+$', '', text).strip()
+
+  # 3. Dynamic ampersand fix: removes stray 'e' or 'ee' right before/after '&'
+  text = re.sub(r'\b[eE]+\s*&', '&', text)
+  text = re.sub(r'&\s*[eE]+\b', '&', text)
+
+  # 4. Strip stray single-digit numbers before prepositions
+  text = re.sub(
+      r'\s+[1-9]\s+(for|in|of|and|&|to|with)\b',
+      r' \1',
+      text,
+      flags=re.IGNORECASE,
+  )
+
+  # 5. Remove isolated single-letter noise in the middle of text
+  text = re.sub(r'\s+\b[b-hj-zB-HJ-Z]\b\s+', ' ', text)
+
+  # 6. Fix Roman numerals at the end of titles (e.g. "Project I" -> "Project 1")
+  text = re.sub(r'\bI\b$', '1', text)
+  text = re.sub(r'\bII\b$', '2', text)
+  text = re.sub(r'\bIII\b$', '3', text)
+
+  # 7. Normalize IT acronym capitalization
+  text = re.sub(r'\bIt\b', 'IT', text)
+
+  # 8. Collapse spaces
+  text = re.sub(r'\s+', ' ', text).strip()
+
+  # 9. Strip leading single-letter artifacts
+  text = re.sub(r'^[a-zA-Z]\s+', '', text).strip()
+
+  return text
+
+
 def extract_table_subjects(lines):
   subjects = []
-  code_pattern = re.compile(r'^(ICS|ITE|IBM)\d{2,4}$', re.IGNORECASE)
+  code_pattern = re.compile(r'^(ICS|ITE|IBM|IS)\d{2,4}$', re.IGNORECASE)
 
   for line in lines:
     for i, w in enumerate(line):
-      raw_text = w['text'].upper().replace('O', '0')
+      raw_text = w['text'].upper()
+      if raw_text.startswith(('ICS', 'ITE', 'IBM', 'IS')):
+        prefix = raw_text[:3]
+        digits = raw_text[3:].replace('O', '0')
+        raw_text = prefix + digits
 
       if code_pattern.match(raw_text):
         code = raw_text
         desc_words = []
         confs = []
+
         stop_keywords = {
             'wedthu',
             'mon',
@@ -163,6 +221,12 @@ def extract_table_subjects(lines):
             'room',
             'f2f',
             'async',
+            'lec',
+            'lab',
+            '(lec)',
+            '(lab)',
+            '(async)',
+            '(f2f)',
         }
 
         for next_w in line[i + 1 :]:
@@ -174,14 +238,14 @@ def extract_table_subjects(lines):
           if clean_txt in stop_keywords or 'room' in clean_txt:
             break
 
+          # Stop if a spatial gap occurs followed by a standalone Units digit
           if desc_words:
             prev_word_right = (
                 line[i + len(desc_words)]['left']
                 + line[i + len(desc_words)]['width']
             )
-            if (next_w['left'] - prev_word_right) > 80 and re.fullmatch(
-                r'[1-9]', txt
-            ):
+            gap = next_w['left'] - prev_word_right
+            if gap > 40 and re.fullmatch(r'[1-9]', txt):
               break
 
           desc_words.append(txt)
@@ -189,10 +253,11 @@ def extract_table_subjects(lines):
             confs.append(next_w['conf'])
 
         desc_text = ' '.join(desc_words).strip()
-        desc_text = re.sub(r'\bRetum\b', 'Return', desc_text)
+        desc_text = clean_subject_description(desc_text)
+
         avg_conf = sum(confs) / len(confs) if confs else 0.0
 
-        if desc_text:
+        if desc_text and not any(s['code'] == code for s in subjects):
           subjects.append({
               'id': f'sub-{len(subjects) + 1}',
               'code': code,
@@ -209,7 +274,7 @@ def extract_table_subjects(lines):
 async def scan_cor_endpoint(file: UploadFile = File(...)):
   image = load_image_from_bytes(file.file)
   data = get_ocr_dataframe_from_cv2(image)
-  lines = group_text_into_lines(data, y_tolerance=10)
+  lines = group_text_into_lines(data, y_tolerance=14)
 
   name, name_conf = extract_student_name(lines)
   subjects = extract_table_subjects(lines)
@@ -223,4 +288,4 @@ async def scan_cor_endpoint(file: UploadFile = File(...)):
       'name_confidence': name_conf,
       'subjects': subjects,
       'image_preview': base64_src,
-  }
+  } 

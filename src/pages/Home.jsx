@@ -78,57 +78,64 @@ function Home() {
     handleFileSelect(e.dataTransfer.files?.[0])
   }
 
-  // Reads Server-Sent Events from FastAPI stream endpoint (http://localhost:8000/api/scan-cor-stream)
-  const runOcr = async () => {
-  if (!imageFile) return
-  setView('processing')
-  setProgress(10)
-  setError('')
-
-  // Smoothly increment progress bar up to 90% while waiting for Python
-  const timer = setInterval(() => {
-    setProgress((prev) => (prev < 90 ? prev + Math.floor(Math.random() * 8) + 3 : 90))
-  }, 200)
-
-  try {
-    const formData = new FormData()
-    formData.append('file', imageFile)
-
-    const response = await fetch('http://localhost:8000/api/scan-cor', {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!response.ok) {
-      throw new Error('Failed to parse document on backend server.')
+  const handleRemoveSelectedFile = () => {
+    setImageFile(null)
+    setImagePreview(null)
+    setError('')
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
     }
-
-    const data = await response.json()
-
-    clearInterval(timer)
-    setProgress(100)
-
-    setStudentName(data.name || '')
-    setSubjects(data.subjects || [])
-
-    if (data.image_preview) {
-      setImagePreview(data.image_preview)
-    }
-
-    if (!data.subjects || data.subjects.length === 0) {
-      setError('No subjects could be detected from this image. Please check or add subjects manually.')
-    }
-
-    setTimeout(() => {
-      setView('review')
-    }, 250)
-  } catch (err) {
-    clearInterval(timer)
-    console.error(err)
-    setError('Failed to scan COR. Make sure your Python backend server is running on port 8000.')
-    setView('upload')
   }
-}
+
+  const runOcr = async () => {
+    if (!imageFile) return
+    setView('processing')
+    setProgress(10)
+    setError('')
+
+    const timer = setInterval(() => {
+      setProgress((prev) => (prev < 90 ? prev + Math.floor(Math.random() * 8) + 3 : 90))
+    }, 200)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', imageFile)
+
+      const response = await fetch('http://localhost:8000/api/scan-cor', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to parse document on backend server.')
+      }
+
+      const data = await response.json()
+
+      clearInterval(timer)
+      setProgress(100)
+
+      setStudentName(data.name || '')
+      setSubjects(data.subjects || [])
+
+      if (data.image_preview) {
+        setImagePreview(data.image_preview)
+      }
+
+      if (!data.subjects || data.subjects.length === 0) {
+        setError('No subjects could be detected from this image. Please check or add subjects manually.')
+      }
+
+      setTimeout(() => {
+        setView('review')
+      }, 250)
+    } catch (err) {
+      clearInterval(timer)
+      console.error(err)
+      setError('Failed to scan COR. Make sure your Python backend server is running on port 8000.')
+      setView('upload')
+    }
+  }
 
   const updateSubject = (id, field, value) => {
     setSubjects((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)))
@@ -214,29 +221,45 @@ function Home() {
             We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
           </p>
 
-          <div
-            className="home__dropzone"
-            onClick={() => fileInputRef.current?.click()}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
-          >
-            {imagePreview ? (
-              <img src={imagePreview} alt="COR preview" className="home__preview" />
-            ) : (
-              <>
-                <UploadIcon className="home__dropzone-icon" />
-                <span className="home__dropzone-text">Click to upload or drag and drop</span>
-                <span className="home__dropzone-hint">JPG or PNG, clear and well-lit</span>
-              </>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              hidden
-              onChange={(e) => handleFileSelect(e.target.files?.[0])}
-            />
-          </div>
+          {!imagePreview ? (
+            <div
+              className="home__dropzone"
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop}
+            >
+              <UploadIcon className="home__dropzone-icon" />
+              <span className="home__dropzone-text">Click to upload or drag and drop</span>
+              <span className="home__dropzone-hint">JPG or PNG, clear and well-lit</span>
+            </div>
+          ) : (
+            <div className="home__preview-card">
+              <div className="home__preview-frame">
+                <img src={imagePreview} alt="COR Preview" className="home__preview-img" />
+              </div>
+
+              <div className="home__preview-info">
+                <span className="home__filename">
+                  📄 {imageFile?.name || 'Selected_COR.jpg'}
+                </span>
+                <button
+                  type="button"
+                  className="home__change-btn"
+                  onClick={handleRemoveSelectedFile}
+                >
+                  Change File
+                </button>
+              </div>
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            hidden
+            onChange={(e) => handleFileSelect(e.target.files?.[0])}
+          />
 
           {error && <p className="home__error">{error}</p>}
 
@@ -275,7 +298,6 @@ function Home() {
           {error && <p className="home__error">{error}</p>}
 
           <div className="home__review-stacked">
-            {/* TOP PANEL: Uploaded Document */}
             <div className="home__preview-panel">
               <span className="home__panel-title">Uploaded Document</span>
               {imagePreview && (
@@ -285,7 +307,6 @@ function Home() {
               )}
             </div>
 
-            {/* BOTTOM PANEL: Editable Verification Form */}
             <div className="home__form-panel">
               <div className="home__field-group">
                 <label className="home__label">Student Name</label>
@@ -294,7 +315,7 @@ function Home() {
                   className="home__input"
                   value={studentName}
                   onChange={(e) => setStudentName(e.target.value)}
-                  placeholder="e.g. COMING, KATELYN L."
+                  placeholder="e.g. SURNAME, FIRSTNAME MIDDLENAME."
                 />
               </div>
 
