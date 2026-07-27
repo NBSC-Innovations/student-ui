@@ -11,7 +11,48 @@
 -- - Helper views
 -- ============================================================
 
+-- ============================================
+-- CLEANUP: Drop existing data and publications
+-- ============================================
+
+-- Drop views
+DROP VIEW IF EXISTS public.gradebook_view CASCADE;
+DROP VIEW IF EXISTS public.instructor_dashboard_view CASCADE;
+
+-- Drop functions
+DROP FUNCTION IF EXISTS public.update_course_student_count() CASCADE;
+
+-- Drop tables in reverse order of creation (respecting foreign keys)
+DROP TABLE IF EXISTS public.gc_message_seen CASCADE;
+DROP TABLE IF EXISTS public.gc_messages CASCADE;
+DROP TABLE IF EXISTS public.group_chat_members CASCADE;
+DROP TABLE IF EXISTS public.group_chats CASCADE;
+DROP TABLE IF EXISTS public.messages CASCADE;
+DROP TABLE IF EXISTS public.audit_log CASCADE;
+DROP TABLE IF EXISTS public.system_settings CASCADE;
+DROP TABLE IF EXISTS public.notifications CASCADE;
+DROP TABLE IF EXISTS public.attendance CASCADE;
+DROP TABLE IF EXISTS public.grades CASCADE;
+DROP TABLE IF EXISTS public.announcements CASCADE;
+DROP TABLE IF EXISTS public.student_progress CASCADE;
+DROP TABLE IF EXISTS public.submissions CASCADE;
+DROP TABLE IF EXISTS public.assignments CASCADE;
+DROP TABLE IF EXISTS public.section_enrollments CASCADE;
+DROP TABLE IF EXISTS public.sections CASCADE;
+DROP TABLE IF EXISTS public.enrollments CASCADE;
+DROP TABLE IF EXISTS public.courses CASCADE;
+DROP TABLE IF EXISTS public.profiles CASCADE;
+
+-- Drop enums
+DROP TYPE IF EXISTS public.grade_scale CASCADE;
+DROP TYPE IF EXISTS public.submission_status CASCADE;
+DROP TYPE IF EXISTS public.assignment_status CASCADE;
+DROP TYPE IF EXISTS public.enrollment_status CASCADE;
+DROP TYPE IF EXISTS public.user_role CASCADE;
+
+-- ============================================
 -- Enable UUID extension
+-- ============================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================
@@ -56,7 +97,6 @@ CREATE TABLE IF NOT EXISTS public.profiles (
 );
 
 -- Email domain validation constraint
-ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_email_domain_check;
 ALTER TABLE public.profiles
   ADD CONSTRAINT profiles_email_domain_check
   CHECK (email LIKE '%@nbsc.edu.ph');
@@ -400,8 +440,6 @@ DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
 DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
 DROP POLICY IF EXISTS "System admins can view all profiles" ON public.profiles;
 DROP POLICY IF EXISTS "System admins can update any profile" ON public.profiles;
-DROP POLICY IF EXISTS "Instructors can view student profiles in their courses" ON public.profiles;
-DROP POLICY IF EXISTS "Students can view coursemate profiles" ON public.profiles;
 
 CREATE POLICY "Users can view own profile"
     ON public.profiles FOR SELECT
@@ -410,58 +448,11 @@ CREATE POLICY "Users can view own profile"
 CREATE POLICY "Users can update own profile"
     ON public.profiles FOR UPDATE
     USING (auth.uid() = id)
-    WITH CHECK (
-        auth.uid() = id 
-        AND role = (SELECT role FROM public.profiles WHERE id = auth.uid())
-    );
+    WITH CHECK (auth.uid() = id);
 
 CREATE POLICY "Users can insert own profile"
     ON public.profiles FOR INSERT
     WITH CHECK (auth.uid() = id);
-
-CREATE POLICY "System admins can view all profiles"
-    ON public.profiles FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
-CREATE POLICY "System admins can update any profile"
-    ON public.profiles FOR UPDATE
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
-CREATE POLICY "Instructors can view student profiles in their courses"
-    ON public.profiles FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.courses c
-            JOIN public.enrollments e ON c.id = e.course_id
-            WHERE c.instructor_id = auth.uid()
-            AND e.student_id = public.profiles.id
-        )
-    );
-
-CREATE POLICY "Students can view coursemate profiles"
-    ON public.profiles FOR SELECT
-    USING (
-        id = auth.uid()
-        OR
-        EXISTS (
-            SELECT 1 FROM public.enrollments e1
-            JOIN public.enrollments e2 ON e1.course_id = e2.course_id
-            WHERE e1.student_id = auth.uid()
-            AND e2.student_id = public.profiles.id
-            AND e1.status = 'active'
-            AND e2.status = 'active'
-        )
-    );
 
 -- ============================================
 -- COURSES RLS POLICIES
@@ -469,66 +460,28 @@ CREATE POLICY "Students can view coursemate profiles"
 
 DROP POLICY IF EXISTS "Students can view enrolled courses" ON public.courses;
 DROP POLICY IF EXISTS "Instructors can view own courses" ON public.courses;
-DROP POLICY IF EXISTS "System admins can view all courses" ON public.courses;
 DROP POLICY IF EXISTS "Instructors can create courses" ON public.courses;
 DROP POLICY IF EXISTS "Instructors can update own courses" ON public.courses;
-DROP POLICY IF EXISTS "System admins can manage all courses" ON public.courses;
 DROP POLICY IF EXISTS "Anyone can view active courses" ON public.courses;
 DROP POLICY IF EXISTS "Authenticated users can upsert courses" ON public.courses;
 DROP POLICY IF EXISTS "Authenticated users can update courses" ON public.courses;
 
 CREATE POLICY "Students can view enrolled courses"
     ON public.courses FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.enrollments
-            WHERE student_id = auth.uid()
-            AND course_id = public.courses.id
-            AND status = 'active'
-        )
-        OR is_active = true
-    );
+    USING (auth.role() = 'authenticated');
 
 CREATE POLICY "Instructors can view own courses"
     ON public.courses FOR SELECT
     USING (instructor_id = auth.uid());
 
-CREATE POLICY "System admins can view all courses"
-    ON public.courses FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can create courses"
     ON public.courses FOR INSERT
-    WITH CHECK (
-        instructor_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'instructor'
-        )
-    );
+    WITH CHECK (instructor_id = auth.uid());
 
 CREATE POLICY "Instructors can update own courses"
     ON public.courses FOR UPDATE
     USING (instructor_id = auth.uid())
     WITH CHECK (instructor_id = auth.uid());
-
-CREATE POLICY "System admins can manage all courses"
-    ON public.courses FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
-CREATE POLICY "Anyone can view active courses"
-    ON public.courses FOR SELECT
-    USING (auth.role() = 'authenticated');
 
 CREATE POLICY "Authenticated users can upsert courses"
     ON public.courses FOR INSERT
@@ -536,69 +489,27 @@ CREATE POLICY "Authenticated users can upsert courses"
 
 CREATE POLICY "Authenticated users can update courses"
     ON public.courses FOR UPDATE
-    USING (auth.role() = 'authenticated');
+    USING (auth.role() = 'authenticated')
+    WITH CHECK (auth.role() = 'authenticated');
 
 -- ============================================
 -- ENROLLMENTS RLS POLICIES
 -- ============================================
 
 DROP POLICY IF EXISTS "Students can view own enrollments" ON public.enrollments;
-DROP POLICY IF EXISTS "Instructors can view course enrollments" ON public.enrollments;
-DROP POLICY IF EXISTS "System admins can view all enrollments" ON public.enrollments;
 DROP POLICY IF EXISTS "Students can create enrollment requests" ON public.enrollments;
 DROP POLICY IF EXISTS "Students can update own enrollment" ON public.enrollments;
 DROP POLICY IF EXISTS "Students can update own enrollments" ON public.enrollments;
 DROP POLICY IF EXISTS "Students can delete own enrollments" ON public.enrollments;
 DROP POLICY IF EXISTS "Students can create enrollments" ON public.enrollments;
-DROP POLICY IF EXISTS "Instructors can manage course enrollments" ON public.enrollments;
-DROP POLICY IF EXISTS "System admins can manage all enrollments" ON public.enrollments;
-DROP POLICY IF EXISTS "Students can view coursemates enrollments" ON public.enrollments;
 
 CREATE POLICY "Students can view own enrollments"
     ON public.enrollments FOR SELECT
     USING (student_id = auth.uid());
 
-CREATE POLICY "Students can view coursemates enrollments"
-    ON public.enrollments FOR SELECT
-    USING (
-        student_id = auth.uid()
-        OR
-        EXISTS (
-            SELECT 1 FROM public.enrollments e2
-            WHERE e2.student_id = auth.uid()
-            AND e2.course_id = public.enrollments.course_id
-            AND e2.status = 'active'
-        )
-    );
-
-CREATE POLICY "Instructors can view course enrollments"
-    ON public.enrollments FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.enrollments.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "System admins can view all enrollments"
-    ON public.enrollments FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Students can create enrollment requests"
     ON public.enrollments FOR INSERT
-    WITH CHECK (
-        student_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'student'
-        )
-    );
+    WITH CHECK (student_id = auth.uid());
 
 CREATE POLICY "Students can create enrollments"
     ON public.enrollments FOR INSERT
@@ -613,43 +524,14 @@ CREATE POLICY "Students can delete own enrollments"
     ON public.enrollments FOR DELETE
     USING (student_id = auth.uid());
 
-CREATE POLICY "Students can update own enrollment"
-    ON public.enrollments FOR UPDATE
-    USING (student_id = auth.uid())
-    WITH CHECK (
-        student_id = auth.uid()
-        AND status IN ('pending', 'active')
-    );
-
-CREATE POLICY "Instructors can manage course enrollments"
-    ON public.enrollments FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.enrollments.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "System admins can manage all enrollments"
-    ON public.enrollments FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 -- ============================================
 -- SECTIONS RLS POLICIES
 -- ============================================
 
 DROP POLICY IF EXISTS "Students can view enrolled sections" ON public.sections;
 DROP POLICY IF EXISTS "Instructors can view own sections" ON public.sections;
-DROP POLICY IF EXISTS "System admins can view all sections" ON public.sections;
 DROP POLICY IF EXISTS "Instructors can create sections" ON public.sections;
 DROP POLICY IF EXISTS "Instructors can update own sections" ON public.sections;
-DROP POLICY IF EXISTS "System admins can manage all sections" ON public.sections;
 
 CREATE POLICY "Students can view enrolled sections"
     ON public.sections FOR SELECT
@@ -665,39 +547,14 @@ CREATE POLICY "Instructors can view own sections"
     ON public.sections FOR SELECT
     USING (instructor_id = auth.uid());
 
-CREATE POLICY "System admins can view all sections"
-    ON public.sections FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can create sections"
     ON public.sections FOR INSERT
-    WITH CHECK (
-        instructor_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.sections.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
+    WITH CHECK (instructor_id = auth.uid());
 
 CREATE POLICY "Instructors can update own sections"
     ON public.sections FOR UPDATE
     USING (instructor_id = auth.uid())
     WITH CHECK (instructor_id = auth.uid());
-
-CREATE POLICY "System admins can manage all sections"
-    ON public.sections FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
 
 -- ============================================
 -- ASSIGNMENTS RLS POLICIES
@@ -705,10 +562,8 @@ CREATE POLICY "System admins can manage all sections"
 
 DROP POLICY IF EXISTS "Students can view course assignments" ON public.assignments;
 DROP POLICY IF EXISTS "Instructors can view course assignments" ON public.assignments;
-DROP POLICY IF EXISTS "System admins can view all assignments" ON public.assignments;
 DROP POLICY IF EXISTS "Instructors can create assignments" ON public.assignments;
 DROP POLICY IF EXISTS "Instructors can update own assignments" ON public.assignments;
-DROP POLICY IF EXISTS "System admins can manage all assignments" ON public.assignments;
 
 CREATE POLICY "Students can view course assignments"
     ON public.assignments FOR SELECT
@@ -731,39 +586,14 @@ CREATE POLICY "Instructors can view course assignments"
         )
     );
 
-CREATE POLICY "System admins can view all assignments"
-    ON public.assignments FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can create assignments"
     ON public.assignments FOR INSERT
-    WITH CHECK (
-        created_by = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.assignments.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
+    WITH CHECK (created_by = auth.uid());
 
 CREATE POLICY "Instructors can update own assignments"
     ON public.assignments FOR UPDATE
     USING (created_by = auth.uid())
     WITH CHECK (created_by = auth.uid());
-
-CREATE POLICY "System admins can manage all assignments"
-    ON public.assignments FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
 
 -- ============================================
 -- SUBMISSIONS RLS POLICIES
@@ -771,11 +601,9 @@ CREATE POLICY "System admins can manage all assignments"
 
 DROP POLICY IF EXISTS "Students can view own submissions" ON public.submissions;
 DROP POLICY IF EXISTS "Instructors can view course submissions" ON public.submissions;
-DROP POLICY IF EXISTS "System admins can view all submissions" ON public.submissions;
 DROP POLICY IF EXISTS "Students can create submissions" ON public.submissions;
 DROP POLICY IF EXISTS "Students can update own submissions" ON public.submissions;
 DROP POLICY IF EXISTS "Instructors can grade submissions" ON public.submissions;
-DROP POLICY IF EXISTS "System admins can manage all submissions" ON public.submissions;
 
 CREATE POLICY "Students can view own submissions"
     ON public.submissions FOR SELECT
@@ -792,35 +620,14 @@ CREATE POLICY "Instructors can view course submissions"
         )
     );
 
-CREATE POLICY "System admins can view all submissions"
-    ON public.submissions FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Students can create submissions"
     ON public.submissions FOR INSERT
-    WITH CHECK (
-        student_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.assignments a
-            JOIN public.enrollments e ON a.course_id = e.course_id
-            WHERE a.id = public.submissions.assignment_id
-            AND e.student_id = auth.uid()
-            AND e.status = 'active'
-        )
-    );
+    WITH CHECK (student_id = auth.uid());
 
 CREATE POLICY "Students can update own submissions"
     ON public.submissions FOR UPDATE
     USING (student_id = auth.uid())
-    WITH CHECK (
-        student_id = auth.uid()
-        AND status IN ('draft', 'submitted')
-    );
+    WITH CHECK (student_id = auth.uid());
 
 CREATE POLICY "Instructors can grade submissions"
     ON public.submissions FOR UPDATE
@@ -831,24 +638,6 @@ CREATE POLICY "Instructors can grade submissions"
             WHERE a.id = public.submissions.assignment_id
             AND c.instructor_id = auth.uid()
         )
-    )
-    WITH CHECK (
-        graded_by = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.assignments a
-            JOIN public.courses c ON a.course_id = c.id
-            WHERE a.id = public.submissions.assignment_id
-            AND c.instructor_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "System admins can manage all submissions"
-    ON public.submissions FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
     );
 
 -- ============================================
@@ -857,8 +646,6 @@ CREATE POLICY "System admins can manage all submissions"
 
 DROP POLICY IF EXISTS "Students can view own progress" ON public.student_progress;
 DROP POLICY IF EXISTS "Instructors can view course progress" ON public.student_progress;
-DROP POLICY IF EXISTS "System admins can view all progress" ON public.student_progress;
-DROP POLICY IF EXISTS "System can update progress" ON public.student_progress;
 
 CREATE POLICY "Students can view own progress"
     ON public.student_progress FOR SELECT
@@ -874,29 +661,14 @@ CREATE POLICY "Instructors can view course progress"
         )
     );
 
-CREATE POLICY "System admins can view all progress"
-    ON public.student_progress FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
-CREATE POLICY "System can update progress"
-    ON public.student_progress FOR ALL
-    USING (true);
-
 -- ============================================
 -- ANNOUNCEMENTS RLS POLICIES
 -- ============================================
 
 DROP POLICY IF EXISTS "Students can view course announcements" ON public.announcements;
 DROP POLICY IF EXISTS "Instructors can view course announcements" ON public.announcements;
-DROP POLICY IF EXISTS "System admins can view all announcements" ON public.announcements;
 DROP POLICY IF EXISTS "Instructors can create announcements" ON public.announcements;
 DROP POLICY IF EXISTS "Instructors can update own announcements" ON public.announcements;
-DROP POLICY IF EXISTS "System admins can manage all announcements" ON public.announcements;
 
 CREATE POLICY "Students can view course announcements"
     ON public.announcements FOR SELECT
@@ -919,39 +691,14 @@ CREATE POLICY "Instructors can view course announcements"
         )
     );
 
-CREATE POLICY "System admins can view all announcements"
-    ON public.announcements FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can create announcements"
     ON public.announcements FOR INSERT
-    WITH CHECK (
-        author_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.announcements.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
+    WITH CHECK (author_id = auth.uid());
 
 CREATE POLICY "Instructors can update own announcements"
     ON public.announcements FOR UPDATE
     USING (author_id = auth.uid())
     WITH CHECK (author_id = auth.uid());
-
-CREATE POLICY "System admins can manage all announcements"
-    ON public.announcements FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
 
 -- ============================================
 -- GRADES RLS POLICIES
@@ -959,9 +706,7 @@ CREATE POLICY "System admins can manage all announcements"
 
 DROP POLICY IF EXISTS "Students can view own grades" ON public.grades;
 DROP POLICY IF EXISTS "Instructors can view course grades" ON public.grades;
-DROP POLICY IF EXISTS "System admins can view all grades" ON public.grades;
 DROP POLICY IF EXISTS "Instructors can manage course grades" ON public.grades;
-DROP POLICY IF EXISTS "System admins can manage all grades" ON public.grades;
 
 CREATE POLICY "Students can view own grades"
     ON public.grades FOR SELECT
@@ -977,15 +722,6 @@ CREATE POLICY "Instructors can view course grades"
         )
     );
 
-CREATE POLICY "System admins can view all grades"
-    ON public.grades FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can manage course grades"
     ON public.grades FOR ALL
     USING (
@@ -995,23 +731,6 @@ CREATE POLICY "Instructors can manage course grades"
             WHERE id = public.grades.course_id
             AND instructor_id = auth.uid()
         )
-    )
-    WITH CHECK (
-        graded_by = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.courses
-            WHERE id = public.grades.course_id
-            AND instructor_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "System admins can manage all grades"
-    ON public.grades FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
     );
 
 -- ============================================
@@ -1020,9 +739,7 @@ CREATE POLICY "System admins can manage all grades"
 
 DROP POLICY IF EXISTS "Students can view own attendance" ON public.attendance;
 DROP POLICY IF EXISTS "Instructors can view section attendance" ON public.attendance;
-DROP POLICY IF EXISTS "System admins can view all attendance" ON public.attendance;
 DROP POLICY IF EXISTS "Instructors can manage section attendance" ON public.attendance;
-DROP POLICY IF EXISTS "System admins can manage all attendance" ON public.attendance;
 
 CREATE POLICY "Students can view own attendance"
     ON public.attendance FOR SELECT
@@ -1038,15 +755,6 @@ CREATE POLICY "Instructors can view section attendance"
         )
     );
 
-CREATE POLICY "System admins can view all attendance"
-    ON public.attendance FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
-
 CREATE POLICY "Instructors can manage section attendance"
     ON public.attendance FOR ALL
     USING (
@@ -1055,23 +763,6 @@ CREATE POLICY "Instructors can manage section attendance"
             SELECT 1 FROM public.sections
             WHERE id = public.attendance.section_id
             AND instructor_id = auth.uid()
-        )
-    )
-    WITH CHECK (
-        recorded_by = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.sections
-            WHERE id = public.attendance.section_id
-            AND instructor_id = auth.uid()
-        )
-    );
-
-CREATE POLICY "System admins can manage all attendance"
-    ON public.attendance FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
         )
     );
 
@@ -1105,27 +796,11 @@ DROP POLICY IF EXISTS "System admins can update settings" ON public.system_setti
 
 CREATE POLICY "System admins can view settings"
     ON public.system_settings FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
+    USING (auth.role() = 'authenticated');
 
 CREATE POLICY "System admins can update settings"
     ON public.system_settings FOR ALL
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    )
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
+    USING (auth.role() = 'authenticated');
 
 -- ============================================
 -- AUDIT LOG RLS POLICIES
@@ -1136,12 +811,7 @@ DROP POLICY IF EXISTS "System can create audit logs" ON public.audit_log;
 
 CREATE POLICY "System admins can view audit logs"
     ON public.audit_log FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.profiles 
-            WHERE id = auth.uid() AND role = 'system_admin'
-        )
-    );
+    USING (auth.role() = 'authenticated');
 
 CREATE POLICY "System can create audit logs"
     ON public.audit_log FOR INSERT
@@ -1152,6 +822,7 @@ CREATE POLICY "System can create audit logs"
 -- ============================================
 
 DROP POLICY IF EXISTS "Users can view chats they are members of" ON public.group_chats;
+DROP POLICY IF EXISTS "Authenticated users can create group chats" ON public.group_chats;
 
 CREATE POLICY "Users can view chats they are members of"
     ON public.group_chats FOR SELECT
@@ -1162,6 +833,10 @@ CREATE POLICY "Users can view chats they are members of"
             AND user_id = auth.uid()
         )
     );
+
+CREATE POLICY "Authenticated users can create group chats"
+    ON public.group_chats FOR INSERT
+    WITH CHECK (auth.role() = 'authenticated');
 
 -- ============================================
 -- MESSAGES RLS POLICIES
@@ -1196,10 +871,15 @@ CREATE POLICY "Users can create messages in their chats"
 -- ============================================
 
 DROP POLICY IF EXISTS "Users can view their chat memberships" ON public.group_chat_members;
+DROP POLICY IF EXISTS "Authenticated users can create chat memberships" ON public.group_chat_members;
 
 CREATE POLICY "Users can view their chat memberships"
     ON public.group_chat_members FOR SELECT
     USING (user_id = auth.uid());
+
+CREATE POLICY "Authenticated users can create chat memberships"
+    ON public.group_chat_members FOR INSERT
+    WITH CHECK (auth.role() = 'authenticated');
 
 -- ============================================
 -- GC MESSAGES RLS POLICIES
@@ -1428,16 +1108,16 @@ BEGIN
     INSERT INTO public.group_chats (course_id, name)
     VALUES (NEW.id, NEW.code || ' - ' || NEW.title)
     ON CONFLICT (course_id) DO NOTHING;
-    
+
     IF NEW.instructor_id IS NOT NULL THEN
         INSERT INTO public.group_chat_members (group_chat_id, user_id)
         SELECT id, NEW.instructor_id FROM public.group_chats WHERE course_id = NEW.id
         ON CONFLICT (group_chat_id, user_id) DO NOTHING;
     END IF;
-    
+
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Trigger to create group chat on course creation
 DROP TRIGGER IF EXISTS create_group_chat_on_course ON public.courses;
@@ -1456,7 +1136,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Trigger to add student to group chat on enrollment
 DROP TRIGGER IF EXISTS add_student_to_chat_on_enrollment ON public.enrollments;

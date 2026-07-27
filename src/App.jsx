@@ -45,10 +45,7 @@ function App() {
       console.log('[Auth]', _event, session?.user?.email ?? 'no session')
 
       if (_event === 'SIGNED_OUT') {
-        setSession(prev => {
-          if (prev !== null) toast.info('You have been signed out.')
-          return null
-        })
+        setSession(null)
         setAuthError('')
         setLoading(false)
         return
@@ -61,15 +58,7 @@ function App() {
           setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
           toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
         } else {
-          setSession(prev => {
-            if (!prev) {
-              const name = session.user.user_metadata?.full_name
-                || session.user.user_metadata?.name
-                || session.user.email.split('@')[0]
-              toast.success(`Welcome back, ${name}!`)
-            }
-            return session
-          })
+          setSession(session)
           setAuthError('')
         }
         setLoading(false)
@@ -102,7 +91,7 @@ function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
-    setSession(null)
+    toast.info('You have been signed out.')
   }
 
   const currentLabel = navItems.find((item) => item.id === activePage)?.label ?? ''

@@ -58,12 +58,12 @@ function Profile({ session }) {
     || user?.user_metadata?.name
     || email.split('@')[0]
 
-  // Load profile from DB
+  // Load profile from DB and auto-sync avatar from metadata
   useEffect(() => {
     if (!user) return
     supabase
       .from('profiles')
-      .select('full_name, student_id, department')
+      .select('full_name, student_id, department, avatar_url')
       .eq('id', user.id)
       .single()
       .then(({ data }) => {
@@ -72,6 +72,18 @@ function Profile({ session }) {
           // Use DB student_id if set, otherwise auto-fill from email
           setStudentId(data.student_id || emailStudentId)
           setDepartment(data.department || '')
+
+          // Auto-sync avatar from metadata if missing or different
+          const metadataAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture
+          if (metadataAvatar && data.avatar_url !== metadataAvatar) {
+            supabase
+              .from('profiles')
+              .update({ avatar_url: metadataAvatar })
+              .eq('id', user.id)
+              .then(({ error }) => {
+                if (error) console.error('Failed to sync avatar:', error)
+              })
+          }
         } else {
           setStudentId(emailStudentId)
         }
@@ -91,7 +103,12 @@ function Profile({ session }) {
     setSaveMsg('')
     const { error } = await supabase
       .from('profiles')
-      .update({ full_name: fullName, student_id: studentId, department })
+      .update({
+        full_name: fullName,
+        student_id: studentId,
+        department,
+        avatar_url: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null,
+      })
       .eq('id', user.id)
     setSaving(false)
     if (error) {

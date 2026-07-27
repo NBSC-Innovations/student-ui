@@ -6,13 +6,45 @@ export async function saveStudentSubjects(studentName, subjects) {
     if (userError) throw userError
     if (!user) throw new Error('User not authenticated')
 
-    // Update student name in profile
-    if (studentName) {
+    // Ensure profile exists (handle case where trigger didn't fire)
+    const { data: existingProfile, error: profileCheckError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    if (profileCheckError) {
+      console.error('Profile check error:', profileCheckError)
+    }
+
+    if (!existingProfile) {
+      console.log('[Save] Profile missing, creating...')
+      const { error: createProfileError } = await supabase
+        .from('profiles')
+        .insert({
+          id: user.id,
+          email: user.email,
+          full_name: studentName || user.user_metadata?.full_name || user.user_metadata?.name || '',
+          role: 'student',
+          avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
+        })
+      if (createProfileError) {
+        console.error('Failed to create profile:', createProfileError)
+        throw new Error('Could not create user profile: ' + createProfileError.message)
+      }
+    } else {
+      // Always sync avatar from metadata, and update name if provided
+      const updateData = {
+        avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture || null,
+      }
+      if (studentName) {
+        updateData.full_name = studentName
+      }
       const { error: profileError } = await supabase
         .from('profiles')
-        .update({ full_name: studentName })
+        .update(updateData)
         .eq('id', user.id)
-      if (profileError) console.warn('Could not update profile name:', profileError.message)
+      if (profileError) console.warn('Could not update profile:', profileError.message)
     }
 
     // ── Step 1: Drop all existing enrollments for this student ────────────
@@ -57,22 +89,31 @@ export async function saveStudentSubjects(studentName, subjects) {
       console.log('[Save] course upsert result:', courseRows, courseError)
 
       let courseId
-      if (courseError || !courseRows?.length) {
-        // Fallback: fetch existing course by code
+      if (!courseError && courseRows?.[0]?.id) {
+        // Upsert succeeded and returned data
+        courseId = courseRows[0].id
+      } else {
+        // Upsert succeeded but didn't return data (common with RLS), or failed
+        // Fetch the course by code
         const { data: existing, error: fetchErr } = await supabase
           .from('courses')
           .select('id')
           .eq('code', code)
           .maybeSingle()
 
-        if (fetchErr || !existing) {
-          console.error('[Save] Cannot find/create course for', code, fetchErr)
+        if (fetchErr) {
+          console.error('[Save] Cannot fetch course for', code, fetchErr)
           errors.push(code)
           continue
         }
+
+        if (!existing) {
+          console.error('[Save] Course not found after upsert:', code)
+          errors.push(code)
+          continue
+        }
+
         courseId = existing.id
-      } else {
-        courseId = courseRows[0].id
       }
 
       // Insert enrollment (clean insert since we deleted all above)

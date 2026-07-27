@@ -68,6 +68,7 @@ function ThreadView({ subject, onBack }) {
   const [menuPos, setMenuPos]           = useState({ x: 0, y: 0 })
   const [seenMap, setSeenMap]           = useState({})
   const [members, setMembers]           = useState([])   // enrolled students
+  const [viewingMember, setViewingMember] = useState(null)  // member profile being viewed
   const bottomRef  = useRef(null)
   const inputRef   = useRef(null)
 
@@ -299,7 +300,12 @@ function ThreadView({ subject, onBack }) {
                 const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
                 const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
                 return (
-                  <div key={m.id} className="home__member-item">
+                  <div
+                    key={m.id}
+                    className="home__member-item"
+                    onClick={() => setViewingMember(m)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <div className="home__member-avatar">
                       {m.avatar_url
                         ? <img src={m.avatar_url} alt={name} />
@@ -473,6 +479,49 @@ function ThreadView({ subject, onBack }) {
           </div>
         )}
 
+        {/* Member profile modal */}
+        {viewingMember && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setViewingMember(null)}
+          >
+            <div
+              className="home__modal-content"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>Member Profile</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setViewingMember(null)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body">
+                <div className="home__modal-avatar">
+                  {viewingMember.avatar_url
+                    ? <img src={viewingMember.avatar_url} alt={viewingMember.full_name} />
+                    : <span>{(viewingMember.full_name || viewingMember.email?.[0] || '?')[0]?.toUpperCase()}</span>
+                  }
+                </div>
+                <div className="home__modal-info">
+                  <p className="home__modal-name">{viewingMember.full_name || 'Unknown'}</p>
+                  <p className="home__modal-email">{viewingMember.email}</p>
+                  {viewingMember.student_id && (
+                    <p className="home__modal-detail">ID: {viewingMember.student_id}</p>
+                  )}
+                  {viewingMember.department && (
+                    <p className="home__modal-detail">Department: {viewingMember.department}</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <form className="home__thread-input" onSubmit={handleSend}>
           <input
             ref={inputRef}
@@ -520,6 +569,7 @@ function Home({ session }) {
   const [subjects, setSubjects] = useState([])
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
   const fileInputRef = useRef(null)
   const toast = useToast()
 
@@ -668,6 +718,7 @@ function Home({ session }) {
   }
 
   const confirmSubjects = async () => {
+    setSaving(true)
     try {
       const result = await saveStudentSubjects(studentName, subjects)
       if (result.success) {
@@ -692,6 +743,8 @@ function Home({ session }) {
     } catch (err) {
       console.error(err)
       setError('Failed to save subjects to database')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -828,6 +881,14 @@ function Home({ session }) {
           <div className="home__progress-track">
             <div className="home__progress-fill" style={{ width: `${progress}%` }} />
           </div>
+        </div>
+      )}
+
+      {saving && (
+        <div className="home__card home__card--center">
+          <div className="home__spinner" />
+          <h2 className="home__title">Joining Group Chats</h2>
+          <p className="home__subtitle">This may take a few seconds…</p>
         </div>
       )}
 
