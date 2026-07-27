@@ -194,14 +194,16 @@ def clean_subject_description(text):
 
 def extract_table_subjects(lines):
   subjects = []
-  code_pattern = re.compile(r'^(ICS|ITE|IBM|IS)\d{2,4}$', re.IGNORECASE)
+  # Updated pattern to handle NBSC format: IT17, IT19, etc.
+  code_pattern = re.compile(r'^(IT|ICS|ITE|IBM|IS)\d{2,4}$', re.IGNORECASE)
 
   for line in lines:
     for i, w in enumerate(line):
       raw_text = w['text'].upper()
-      if raw_text.startswith(('ICS', 'ITE', 'IBM', 'IS')):
-        prefix = raw_text[:3]
-        digits = raw_text[3:].replace('O', '0')
+      # Handle OCR misreads for IT codes
+      if raw_text.startswith(('IT', 'ICS', 'ITE', 'IBM', 'IS')):
+        prefix = raw_text[:2] if raw_text.startswith('IT') else raw_text[:3]
+        digits = raw_text[len(prefix):].replace('O', '0')
         raw_text = prefix + digits
 
       if code_pattern.match(raw_text):
@@ -288,4 +290,9 @@ async def scan_cor_endpoint(file: UploadFile = File(...)):
       'name_confidence': name_conf,
       'subjects': subjects,
       'image_preview': base64_src,
-  } 
+  }
+
+
+if __name__ == '__main__':
+  import uvicorn
+  uvicorn.run(app, host='0.0.0.0', port=8000) 
