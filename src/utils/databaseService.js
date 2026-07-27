@@ -242,7 +242,7 @@ export async function unsendMessage(messageId) {
   try {
     const { error } = await supabase
       .from('gc_messages')
-      .update({ is_deleted: true, content: '' })
+      .delete()
       .eq('id', messageId)
     if (error) throw error
     return { success: true }

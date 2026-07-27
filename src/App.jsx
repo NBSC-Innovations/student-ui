@@ -70,7 +70,6 @@ function App() {
           supabase.auth.signOut()
           setSession(null)
           setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
-          toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
         } else {
           setSession(session)
           setAuthError('')
