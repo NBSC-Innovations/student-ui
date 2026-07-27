@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
-import { saveStudentSubjects } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, subscribeToMessages } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -52,8 +52,129 @@ function SendIcon(props) {
   )
 }
 
+// ── Thread view with real-time messaging ─────────────────────────────────
+function ThreadView({ subject, onBack }) {
+  const [messages, setMessages] = useState([])
+  const [text, setText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
+  const bottomRef = useRef(null)
+
+  useEffect(() => {
+    // Get current user for sender detection
+    import('../utils/supabaseClient').then(({ supabase }) => {
+      supabase.auth.getUser().then(({ data: { user } }) => setCurrentUser(user))
+    })
+
+    // Load existing messages
+    getMessages(subject.courseId).then((result) => {
+      if (result.success) setMessages(result.messages)
+    })
+
+    // Subscribe to new messages in real time
+    const channel = subscribeToMessages(subject.courseId, (newMsg) => {
+      setMessages((prev) => [...prev, newMsg])
+    })
+
+    return () => channel.unsubscribe()
+  }, [subject.courseId])
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
+
+  const handleSend = async (e) => {
+    e.preventDefault()
+    const trimmed = text.trim()
+    if (!trimmed || sending) return
+    setSending(true)
+    setText('')
+    const result = await sendMessage(subject.courseId, trimmed)
+    if (!result.success) {
+      setText(trimmed) // restore on failure
+    }
+    setSending(false)
+  }
+
+  const formatTime = (iso) => {
+    const d = new Date(iso)
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const formatDate = (iso) => {
+    const d = new Date(iso)
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+  }
+
+  // Group messages by date
+  const grouped = messages.reduce((acc, msg) => {
+    const date = formatDate(msg.created_at)
+    if (!acc[date]) acc[date] = []
+    acc[date].push(msg)
+    return acc
+  }, {})
+
+  return (
+    <div className="home__thread">
+      <div className="home__thread-header">
+        <button type="button" className="home__thread-back" onClick={onBack} aria-label="Back">
+          <BackIcon width={18} height={18} />
+        </button>
+        <div className="home__gc-icon home__gc-icon--sm">
+          <ChatIcon width={15} height={15} />
+        </div>
+        <div className="home__thread-title">
+          <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+          <span className="home__gc-desc">{subject.description}</span>
+        </div>
+      </div>
+
+      <div className="home__thread-body">
+        {messages.length === 0 && (
+          <p className="home__thread-placeholder">
+            No messages yet. Say hello to your classmates! 👋
+          </p>
+        )}
+
+        {Object.entries(grouped).map(([date, msgs]) => (
+          <div key={date}>
+            <div className="home__thread-date">{date}</div>
+            {msgs.map((msg) => {
+              const isMe = msg.sender_id === currentUser?.id
+              const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+              return (
+                <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
+                  {!isMe && <span className="home__msg-sender">{senderName}</span>}
+                  <div className="home__msg-bubble">{msg.content}</div>
+                  <span className="home__msg-time">{formatTime(msg.created_at)}</span>
+                </div>
+              )
+            })}
+          </div>
+        ))}
+        <div ref={bottomRef} />
+      </div>
+
+      <form className="home__thread-input" onSubmit={handleSend}>
+        <input
+          type="text"
+          placeholder="Message…"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          disabled={sending}
+          autoComplete="off"
+        />
+        <button type="submit" disabled={!text.trim() || sending} aria-label="Send">
+          <SendIcon width={17} height={17} />
+        </button>
+      </form>
+    </div>
+  )
+}
+
 function Home() {
-  const [view, setView] = useState('prompt')
+  const [view, setView] = useState('loading')   // start in loading state
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
@@ -62,6 +183,27 @@ function Home() {
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const fileInputRef = useRef(null)
+
+  // On mount: load existing enrollments from DB
+  useEffect(() => {
+    const loadEnrollments = async () => {
+      const result = await getStudentEnrollments()
+      if (result.success && result.enrollments?.length > 0) {
+        // Map enrollments → subject shape the rest of the UI expects
+        const loaded = result.enrollments.map((e) => ({
+          id: e.id,
+          code: e.courses?.code || '',
+          description: e.courses?.title || '',
+          courseId: e.course_id,
+        }))
+        setSubjects(loaded)
+        setView('chats')
+      } else {
+        setView('prompt')
+      }
+    }
+    loadEnrollments()
+  }, [])
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -102,7 +244,8 @@ function Home() {
       const formData = new FormData()
       formData.append('file', imageFile)
 
-      const response = await fetch('http://localhost:8000/api/scan-cor', {
+      const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
+      const response = await fetch(`${backendUrl}/api/scan-cor`, {
         method: 'POST',
         body: formData,
       })
@@ -133,7 +276,11 @@ function Home() {
     } catch (err) {
       clearInterval(timer)
       console.error(err)
-      setError('Failed to scan COR. Make sure your Python backend server is running on port 8000.')
+      if (err.message?.includes('fetch') || err.name === 'TypeError') {
+        setError('Cannot reach the OCR backend. Run: cd backend && uvicorn main:app --reload --port 8000')
+      } else {
+        setError('Failed to scan COR: ' + (err.message || 'Unknown error'))
+      }
       setView('upload')
     }
   }
@@ -157,9 +304,20 @@ function Home() {
     try {
       const result = await saveStudentSubjects(studentName, subjects)
       if (result.success) {
+        // Reload from DB so the GC list is DB-driven
+        const fresh = await getStudentEnrollments()
+        if (fresh.success && fresh.enrollments?.length > 0) {
+          const loaded = fresh.enrollments.map((e) => ({
+            id: e.id,
+            code: e.courses?.code || '',
+            description: e.courses?.title || '',
+            courseId: e.course_id,
+          }))
+          setSubjects(loaded)
+        }
         setView('chats')
       } else {
-        setError('Failed to save subjects to database: ' + result.error)
+        setError('Failed to save subjects: ' + result.error)
       }
     } catch (err) {
       console.error(err)
@@ -172,9 +330,9 @@ function Home() {
     setImageFile(null)
     setImagePreview(null)
     setStudentName('')
-    setSubjects([])
     setError('')
     setProgress(0)
+    // Don't clear subjects — keep existing enrollments visible
   }
 
   const openThread = (subject) => {
@@ -189,6 +347,13 @@ function Home() {
 
   return (
     <div className="home">
+      {view === 'loading' && (
+        <div className="home__card home__card--center">
+          <div className="home__spinner" />
+          <p className="home__subtitle">Loading your group chats…</p>
+        </div>
+      )}
+
       {view === 'prompt' && (
         <div className="home__card home__card--center">
           <div className="home__prompt-icon">
@@ -419,34 +584,10 @@ function Home() {
       )}
 
       {view === 'thread' && activeThread && (
-        <div className="home__thread">
-          <div className="home__thread-header">
-            <button type="button" className="home__thread-back" onClick={backToChats} aria-label="Back">
-              <BackIcon width={18} height={18} />
-            </button>
-            <div className="home__gc-icon home__gc-icon--sm">
-              <ChatIcon width={15} height={15} />
-            </div>
-            <div className="home__thread-title">
-              <span className="home__gc-code">{activeThread.code || 'Untitled'}</span>
-              <span className="home__gc-desc">{activeThread.description}</span>
-            </div>
-          </div>
-
-          <div className="home__thread-body">
-            <p className="home__thread-placeholder">
-              This is the start of your class group chat. Messaging isn't wired up yet — this is a
-              placeholder screen.
-            </p>
-          </div>
-
-          <div className="home__thread-input">
-            <input type="text" placeholder="Message..." disabled />
-            <button type="button" disabled aria-label="Send">
-              <SendIcon width={17} height={17} />
-            </button>
-          </div>
-        </div>
+        <ThreadView
+          subject={activeThread}
+          onBack={backToChats}
+        />
       )}
     </div>
   )
