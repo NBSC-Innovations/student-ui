@@ -211,33 +211,27 @@ def extract_table_subjects(lines):
         desc_words = []
         confs = []
 
+        # Reduced stop keywords - only stop at clear schedule indicators
         stop_keywords = {
-            'wedthu',
-            'mon',
-            'tue',
-            'wed',
-            'thu',
-            'fri',
-            'sat',
-            'tba',
+            'units',
+            'unit',
+            'lecture',
+            'laboratory',
+            'instructor',
             'room',
-            'f2f',
-            'async',
-            'lec',
-            'lab',
-            '(lec)',
-            '(lab)',
-            '(async)',
-            '(f2f)',
+            'tba',
         }
 
         for next_w in line[i + 1 :]:
           txt = next_w['text']
-          clean_txt = (
-              txt.lower().replace('(', '').replace(')', '').strip()
-          )
+          clean_txt = txt.lower().replace('(', '').replace(')', '').strip()
 
+          # Stop at clear schedule indicators
           if clean_txt in stop_keywords or 'room' in clean_txt:
+            break
+
+          # Stop if we hit a day pattern followed by time (schedule info)
+          if re.match(r'^(mon|tue|wed|thu|fri|sat|sun)', clean_txt) and ':' in txt:
             break
 
           # Stop if a spatial gap occurs followed by a standalone Units digit
@@ -247,7 +241,7 @@ def extract_table_subjects(lines):
                 + line[i + len(desc_words)]['width']
             )
             gap = next_w['left'] - prev_word_right
-            if gap > 40 and re.fullmatch(r'[1-9]', txt):
+            if gap > 50 and re.fullmatch(r'[1-9]', txt):
               break
 
           desc_words.append(txt)
@@ -259,13 +253,14 @@ def extract_table_subjects(lines):
 
         avg_conf = sum(confs) / len(confs) if confs else 0.0
 
+        # Lower confidence threshold and accept even low confidence subjects
         if desc_text and not any(s['code'] == code for s in subjects):
           subjects.append({
               'id': f'sub-{len(subjects) + 1}',
               'code': code,
               'description': desc_text,
               'confidence': round(avg_conf, 1),
-              'needs_review': avg_conf < MIN_CONFIDENCE_SUBJECT,
+              'needs_review': avg_conf < 40,  # Lowered threshold
           })
         break
 
