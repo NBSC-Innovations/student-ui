@@ -973,9 +973,9 @@ function Home({ session }) {
                   type="button"
                   className="home__btn home__btn--primary"
                   onClick={confirmSubjects}
-                  disabled={subjects.length === 0}
+                  disabled={subjects.length === 0 || saving}
                 >
-                  Confirm & Join Group Chats
+                  {saving ? 'Joining Group Chats...' : 'Confirm & Join Group Chats'}
                 </button>
               </div>
             </div>

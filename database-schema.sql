@@ -364,7 +364,10 @@ CREATE TABLE IF NOT EXISTS public.gc_messages (
     course_id UUID NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
     sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    edited_at TIMESTAMPTZ,
+    is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+    reply_to UUID REFERENCES public.gc_messages(id) ON DELETE SET NULL
 );
 
 -- ============================================
