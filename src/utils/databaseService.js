@@ -2,29 +2,39 @@ import { supabase } from './supabaseClient'
 
 export async function saveStudentSubjects(studentName, subjects) {
   try {
-    // Get current user
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
     if (!user) throw new Error('User not authenticated')
 
-    // Update student name in profile (ignore error if profile doesn't exist yet)
+    // Update student name in profile
     if (studentName) {
       const { error: profileError } = await supabase
         .from('profiles')
         .update({ full_name: studentName })
         .eq('id', user.id)
-
-      if (profileError) {
-        console.warn('Could not update profile name:', profileError.message)
-      }
+      if (profileError) console.warn('Could not update profile name:', profileError.message)
     }
 
+    // ── Step 1: Drop all existing active enrollments for this student ──────
+    // This ensures re-uploading replaces GC membership entirely
+    const { error: deleteError } = await supabase
+      .from('enrollments')
+      .delete()
+      .eq('student_id', user.id)
+      .eq('status', 'active')
+
+    if (deleteError) {
+      console.error('Failed to clear old enrollments:', deleteError)
+      throw new Error('Could not reset enrollments: ' + deleteError.message)
+    }
+
+    // ── Step 2: Upsert courses and create fresh enrollments ────────────────
     const savedSubjects = []
 
     for (const subject of subjects) {
       if (!subject.code) continue
 
-      // Upsert course — insert if not exists, do nothing if code already exists
+      // Upsert course by code
       const { data: course, error: courseError } = await supabase
         .from('courses')
         .upsert(
@@ -34,34 +44,31 @@ export async function saveStudentSubjects(studentName, subjects) {
         .select('id')
         .single()
 
+      let courseId
       if (courseError) {
-        console.error('Course upsert error for', subject.code, courseError)
-        // Try to fetch existing course if upsert failed
+        // Fallback: fetch existing course
         const { data: existing } = await supabase
           .from('courses')
           .select('id')
           .eq('code', subject.code.toUpperCase())
           .single()
-        if (!existing) continue
-        subject._courseId = existing.id
+        if (!existing) { console.error('Course not found for', subject.code); continue }
+        courseId = existing.id
       } else {
-        subject._courseId = course.id
+        courseId = course.id
       }
 
-      // Upsert enrollment — insert if not exists, skip if already enrolled
+      // Insert fresh enrollment
       const { error: enrollError } = await supabase
         .from('enrollments')
-        .upsert(
-          { student_id: user.id, course_id: subject._courseId, status: 'active' },
-          { onConflict: 'student_id,course_id', ignoreDuplicates: true }
-        )
+        .insert({ student_id: user.id, course_id: courseId, status: 'active' })
 
       if (enrollError) {
         console.error('Enrollment error for', subject.code, enrollError)
         continue
       }
 
-      savedSubjects.push({ ...subject, courseId: subject._courseId })
+      savedSubjects.push({ ...subject, courseId })
     }
 
     if (savedSubjects.length === 0) {

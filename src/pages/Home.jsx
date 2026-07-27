@@ -251,7 +251,7 @@ function Home() {
       })
 
       if (!response.ok) {
-        throw new Error('Failed to parse document on backend server.')
+        throw new Error('Unable to process the document. Please try again.')
       }
 
       const data = await response.json()
@@ -285,9 +285,9 @@ function Home() {
       clearInterval(timer)
       console.error(err)
       if (err.message?.includes('fetch') || err.name === 'TypeError') {
-        setError('Cannot reach the OCR backend. Run: cd backend && uvicorn main:app --reload --port 8000')
+        setError('Scanning service is unavailable. Please try again later.')
       } else {
-        setError('Failed to scan COR: ' + (err.message || 'Unknown error'))
+        setError('Failed to scan COR. Please try again.')
       }
       setView('upload')
     }
@@ -461,12 +461,11 @@ function Home() {
       {view === 'processing' && (
         <div className="home__card home__card--center">
           <div className="home__spinner" />
-          <h2 className="home__title">Processing your COR...</h2>
-          <p className="home__subtitle">Running OpenCV preprocessing & OCR analysis.</p>
+          <h2 className="home__title">Scanning your COR</h2>
+          <p className="home__subtitle">This may take a few seconds…</p>
           <div className="home__progress-track">
             <div className="home__progress-fill" style={{ width: `${progress}%` }} />
           </div>
-          <span className="home__progress-label">{progress}%</span>
         </div>
       )}
 
