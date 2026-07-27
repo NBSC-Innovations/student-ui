@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Sidebar, { navItems } from './components/Sidebar.jsx'
 import Home from './pages/Home.jsx'
 import Pages from './pages/Pages.jsx'
+import Login from './pages/Login.jsx'
+import { supabase } from './utils/supabaseClient'
 import './App.css'
 
 function MenuIcon(props) {
@@ -18,17 +20,45 @@ function MenuIcon(props) {
 function App() {
   const [activePage, setActivePage] = useState('home')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [session, setSession] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // Check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setLoading(false)
+    })
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
 
   const handleNavigate = (id) => {
     setActivePage(id)
     setSidebarOpen(false)
   }
 
-  const handleLogout = () => {
-    console.log('Logout clicked')
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setSession(null)
   }
 
   const currentLabel = navItems.find((item) => item.id === activePage)?.label ?? ''
+
+  if (loading) {
+    return <div className="home"><div className="home__card home__card--center"><p>Loading...</p></div></div>
+  }
+
+  if (!session) {
+    return <Login />
+  }
 
   const renderPage = () => {
     switch (activePage) {

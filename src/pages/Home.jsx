@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import '../styles/Home.css'
+import { saveStudentSubjects } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -152,8 +153,18 @@ function Home() {
     ])
   }
 
-  const confirmSubjects = () => {
-    setView('chats')
+  const confirmSubjects = async () => {
+    try {
+      const result = await saveStudentSubjects(studentName, subjects)
+      if (result.success) {
+        setView('chats')
+      } else {
+        setError('Failed to save subjects to database: ' + result.error)
+      }
+    } catch (err) {
+      console.error(err)
+      setError('Failed to save subjects to database')
+    }
   }
 
   const startOver = () => {
