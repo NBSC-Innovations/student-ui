@@ -25,48 +25,41 @@ function App() {
   const [authError, setAuthError] = useState('')
 
   useEffect(() => {
-    // Check for existing session
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      console.log('Initial session check:', session?.user?.email)
-      console.log('Full session object:', session)
-      
-      // Validate email domain on initial session check
-      if (session?.user?.email && !session.user.email.endsWith('@nbsc.edu.ph')) {
-        console.log('Invalid email on initial check, signing out:', session.user.email)
-        await supabase.auth.signOut()
-        setSession(null)
-        setAuthError('Only @nbsc.edu.ph email addresses are allowed')
-      } else {
+    // Get initial session on mount
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user?.email?.endsWith('@nbsc.edu.ph')) {
         setSession(session)
+      } else if (session) {
+        supabase.auth.signOut()
+        setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
       }
       setLoading(false)
     })
 
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      console.log('Auth state changed:', _event)
-      console.log('Session email:', session?.user?.email)
-      console.log('Full session object:', session)
-      
-      if (_event === 'SIGNED_IN') {
-        // Validate email domain on sign in
-        if (session?.user?.email && !session.user.email.endsWith('@nbsc.edu.ph')) {
-          console.log('Invalid email domain, signing out:', session.user.email)
-          await supabase.auth.signOut()
-          setSession(null)
-          setAuthError('Only @nbsc.edu.ph email addresses are allowed')
-          return
-        }
-        setAuthError('')
-      }
-      
+    // React to all auth changes (sign in, sign out, token refresh)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      console.log('[Auth]', _event, session?.user?.email ?? 'no session')
+
       if (_event === 'SIGNED_OUT') {
+        setSession(null)
         setAuthError('')
+        setLoading(false)
+        return
       }
-      
-      setSession(session)
+
+      if (session?.user?.email) {
+        if (!session.user.email.endsWith('@nbsc.edu.ph')) {
+          supabase.auth.signOut()
+          setSession(null)
+          setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
+        } else {
+          setSession(session)
+          setAuthError('')
+        }
+      } else {
+        setSession(null)
+      }
+      setLoading(false)
     })
 
     return () => subscription.unsubscribe()
