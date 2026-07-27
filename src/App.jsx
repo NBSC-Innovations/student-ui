@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react'
 import Sidebar, { navItems } from './components/Sidebar.jsx'
 import Home from './pages/Home.jsx'
 import Pages from './pages/Pages.jsx'
+import Profile from './pages/Profile.jsx'
 import Login from './pages/Login.jsx'
 import { supabase } from './utils/supabaseClient'
+import NbscLogo from './assets/Nbsc-logo.png'
 import './App.css'
 
 function MenuIcon(props) {
@@ -117,8 +119,8 @@ function App() {
         return <Home />
       case 'pages':
         return <Pages />
-      // case 'profile':
-      //   return <Profile />
+      case 'profile':
+        return <Profile session={session} />
       default:
         return <Home />
     }
@@ -132,17 +134,11 @@ function App() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onLogout={handleLogout}
+        session={session}
       />
 
       <div className="main-content">
         <header className="topbar">
-          <div className="topbar__brand">
-            <div className="topbar__logo">NBSC</div>
-            <span className="topbar__brand-text">NBSC SIS</span>
-          </div>
-
-          <h1 className="topbar__title">{currentLabel}</h1>
-
           <button
             type="button"
             className="topbar__burger"
@@ -151,6 +147,30 @@ function App() {
           >
             <MenuIcon width={20} height={20} />
           </button>
+
+          <div className="topbar__brand">
+            <img src={NbscLogo} alt="NBSC" className="topbar__logo-img" />
+            <span className="topbar__brand-text">NBSC Student Portal</span>
+          </div>
+
+          <h1 className="topbar__title">{currentLabel}</h1>
+
+          <div className="topbar__profile">
+            <div className="topbar__avatar">
+              {session?.user?.user_metadata?.avatar_url
+                ? <img src={session.user.user_metadata.avatar_url} alt="avatar" />
+                : <span>{(session?.user?.email?.[0] ?? '?').toUpperCase()}</span>
+              }
+            </div>
+            <div className="topbar__user-info">
+              <span className="topbar__user-name">
+                {session?.user?.user_metadata?.full_name
+                  || session?.user?.user_metadata?.name
+                  || session?.user?.email?.split('@')[0]}
+              </span>
+              <span className="topbar__user-email">{session?.user?.email}</span>
+            </div>
+          </div>
         </header>
 
         <main className="content-area">

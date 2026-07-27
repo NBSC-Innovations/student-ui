@@ -259,6 +259,16 @@ function Home() {
       clearInterval(timer)
       setProgress(100)
 
+      // If nothing was extracted at all, treat as unextractable
+      const hasName = !!data.name?.trim()
+      const hasSubjects = data.subjects?.length > 0
+
+      if (!hasName && !hasSubjects) {
+        setError('Could not extract any information from this image. Please upload a clearer photo of your COR.')
+        setView('upload')
+        return
+      }
+
       setStudentName(data.name || '')
       setSubjects(data.subjects || [])
 
@@ -266,13 +276,11 @@ function Home() {
         setImagePreview(data.image_preview)
       }
 
-      if (!data.subjects || data.subjects.length === 0) {
-        setError('No subjects could be detected from this image. Please check or add subjects manually.')
+      if (!hasSubjects) {
+        setError('No subjects could be detected. Please check or add them manually.')
       }
 
-      setTimeout(() => {
-        setView('review')
-      }, 250)
+      setTimeout(() => setView('review'), 250)
     } catch (err) {
       clearInterval(timer)
       console.error(err)

@@ -18,48 +18,12 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 28px;
+  padding: 0 24px;
   background: #0F2854;
   border-bottom: none;
   position: sticky;
   top: 0;
   z-index: 20;
-}
-
-.topbar__brand {
-  display: none;
-  align-items: center;
-  gap: 10px;
-}
-
-.topbar__logo {
-  width: 30px;
-  height: 30px;
-  flex-shrink: 0;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 9px;
-  letter-spacing: 0.3px;
-}
-
-.topbar__brand-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
-}
-
-.topbar__title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #fff;
-  margin: 0;
-  flex: 1;
 }
 
 .topbar__burger {
@@ -74,11 +38,97 @@
   color: #fff;
   cursor: pointer;
   flex-shrink: 0;
-  order: 3;
 }
 
 .topbar__burger:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar__logo-img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.9);
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.topbar__brand-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.topbar__title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+  flex: 1;
+}
+
+/* Profile chip on topbar */
+.topbar__profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.topbar__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.topbar__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.topbar__user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar__user-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+.topbar__user-email {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
 }
 
 .content-area {
@@ -95,19 +145,16 @@
     padding: 0 16px;
   }
 
-  .topbar__brand {
+  .topbar__burger {
     display: flex;
-    order: 1;
   }
 
   .topbar__title {
     display: none;
   }
 
-  .topbar__burger {
-    display: flex;
-    order: 2;
-    margin-left: auto;
+  .topbar__user-info {
+    display: none;
   }
 
   .content-area {
