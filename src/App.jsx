@@ -22,18 +22,50 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [authError, setAuthError] = useState('')
 
   useEffect(() => {
     // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      console.log('Initial session check:', session?.user?.email)
+      console.log('Full session object:', session)
+      
+      // Validate email domain on initial session check
+      if (session?.user?.email && !session.user.email.endsWith('@nbsc.edu.ph')) {
+        console.log('Invalid email on initial check, signing out:', session.user.email)
+        await supabase.auth.signOut()
+        setSession(null)
+        setAuthError('Only @nbsc.edu.ph email addresses are allowed')
+      } else {
+        setSession(session)
+      }
       setLoading(false)
     })
 
     // Listen for auth changes
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      console.log('Auth state changed:', _event)
+      console.log('Session email:', session?.user?.email)
+      console.log('Full session object:', session)
+      
+      if (_event === 'SIGNED_IN') {
+        // Validate email domain on sign in
+        if (session?.user?.email && !session.user.email.endsWith('@nbsc.edu.ph')) {
+          console.log('Invalid email domain, signing out:', session.user.email)
+          await supabase.auth.signOut()
+          setSession(null)
+          setAuthError('Only @nbsc.edu.ph email addresses are allowed')
+          return
+        }
+        setAuthError('')
+      }
+      
+      if (_event === 'SIGNED_OUT') {
+        setAuthError('')
+      }
+      
       setSession(session)
     })
 
@@ -53,11 +85,37 @@ function App() {
   const currentLabel = navItems.find((item) => item.id === activePage)?.label ?? ''
 
   if (loading) {
-    return <div className="home"><div className="home__card home__card--center"><p>Loading...</p></div></div>
+    return (
+      <div className="home">
+        <div className="home__card home__card--center">
+          <p>Loading...</p>
+          {authError && <p style={{color: 'red', marginTop: '10px'}}>{authError}</p>}
+        </div>
+      </div>
+    )
   }
 
   if (!session) {
-    return <Login />
+    return (
+      <div>
+        {authError && (
+          <div style={{
+            position: 'fixed',
+            top: '10px',
+            right: '10px',
+            background: '#ffebee',
+            border: '1px solid #f44336',
+            padding: '10px',
+            borderRadius: '4px',
+            zIndex: 1000,
+            maxWidth: '300px'
+          }}>
+            <strong>Auth Debug:</strong> {authError}
+          </div>
+        )}
+        <Login />
+      </div>
+    )
   }
 
   const renderPage = () => {

@@ -23,22 +23,23 @@ function Login({ onLogin }) {
     setError('')
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
+      const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
           queryParams: {
-            prompt: 'select_account',
-            access_type: 'offline'
+            prompt: 'select_account'
           }
         }
       })
 
-      if (error) throw error
+      if (error) {
+        console.error('OAuth error:', error)
+        throw error
+      }
     } catch (err) {
       console.error('Login error:', err)
-      setError('Failed to login with Google. Please try again.')
-    } finally {
+      setError(err.message || 'Failed to login with Google. Please try again.')
       setLoading(false)
     }
   }
