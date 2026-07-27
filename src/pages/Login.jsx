@@ -105,9 +105,7 @@ function Login() {
       return false
     }
     if (!val.endsWith('@nbsc.edu.ph')) {
-      const msg = 'Only @nbsc.edu.ph email addresses are allowed.'
-      setEmailError(msg)
-      toast.error(msg)
+      setEmailError('Only @nbsc.edu.ph email addresses are allowed.')
       return false
     }
     setEmailError('')
