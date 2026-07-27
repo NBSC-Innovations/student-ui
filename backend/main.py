@@ -194,13 +194,99 @@ def clean_subject_description(text):
 
 def extract_table_subjects(lines):
   subjects = []
-  # Updated pattern to handle NBSC format: IT17, IT19, etc.
   code_pattern = re.compile(r'^(IT|ICS|ITE|IBM|IS)\d{2,4}$', re.IGNORECASE)
+
+  # Pattern for day abbreviations: MON, TUE, WED, THU, FRI, SAT, SUN (also M/T/W/TH/F/S)
+  day_pattern = re.compile(
+      r'\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun|M|T|W|TH|F|S)(/?(Mon|Tue|Wed|Thu|Fri|Sat|Sun|M|T|W|TH|F|S))*\b',
+      re.IGNORECASE
+  )
+  # Pattern for time: 7:30, 9:00, 10:30 AM, 1:00 PM etc.
+  time_pattern = re.compile(
+      r'\b\d{1,2}:\d{2}\s*(?:AM|PM)?\s*[-–]\s*\d{1,2}:\d{2}\s*(?:AM|PM)?\b',
+      re.IGNORECASE
+  )
+  # Pattern for room: alphanumeric room codes like "IT101", "Rm 3", "Lab 2", "Gym", "TBA"
+  room_pattern = re.compile(
+      r'\b(?:Rm\.?\s*\w+|\w*Lab\w*|\w*Room\w*|Gym|TBA|[A-Z]{1,4}\d{2,4})\b',
+      re.IGNORECASE
+  )
+
+  def extract_schedule_from_line(line, start_idx):
+    """Extract schedule info (days, time, room, instructor) from words after start_idx."""
+    words_after = line[start_idx:]
+    remaining = ' '.join(w['text'] for w in words_after)
+
+    days = ''
+    time = ''
+    room = ''
+    instructor = ''
+
+    day_match = day_pattern.search(remaining)
+    if day_match:
+      days = day_match.group(0).strip()
+
+    time_match = time_pattern.search(remaining)
+    if time_match:
+      time = time_match.group(0).strip()
+
+    room_match = room_pattern.search(remaining)
+    if room_match:
+      candidate = room_match.group(0).strip()
+      if candidate.lower() not in days.lower() and candidate not in time:
+        room = candidate
+
+    # ── Instructor extraction ─────────────────────────────────────────────
+    # Strategy: find the rightmost cluster of words that look like a person's name.
+    # On NBSC COR the instructor column is always the last column on the row.
+    # We remove known schedule tokens and look at what's left.
+
+    # Build a clean copy with schedule tokens removed
+    noise_re = re.compile(
+        r'\b(lec|lab|lecture|laboratory|units?|tba|[0-9]+(?:\.[0-9]+)?)\b'
+        r'|' + re.escape(days) +
+        r'|' + re.escape(time) +
+        r'|' + re.escape(room),
+        re.IGNORECASE
+    ) if (days or time or room) else re.compile(
+        r'\b(lec|lab|lecture|laboratory|units?|tba|[0-9]+(?:\.[0-9]+)?)\b',
+        re.IGNORECASE
+    )
+
+    leftover = noise_re.sub(' ', remaining)
+    # Remove remaining punctuation except dots/commas in names
+    leftover = re.sub(r'[^A-Za-z\s\.\,]', ' ', leftover)
+    leftover = re.sub(r'\s+', ' ', leftover).strip()
+
+    if not leftover:
+      if days or time:
+        return {'days': days, 'time': time, 'room': room, 'instructor': ''}
+      return None
+
+    # Match Filipino-style names: all-caps words OR Title-case words, 2-5 tokens
+    # Handles: "DELA CRUZ MARIA A", "Reyes John", "DE LA PENA"
+    name_re = re.compile(
+        r'\b(?:[A-Z]{2,}|[A-Z][a-z]+)(?:\s+(?:[A-Z]{2,}|[A-Z][a-z]+)){1,5}\b'
+    )
+    # Find ALL matches and take the longest one (most likely the full name)
+    matches = name_re.findall(leftover)
+    ignore_words = {
+        'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+        'TBA', 'Lab', 'Gym', 'Room', 'Lec', 'Laboratory',
+        'Lecture', 'Units', 'Unit',
+    }
+    candidates = [m.strip() for m in matches if len(m.strip()) >= 5 and m.strip() not in ignore_words]
+    if candidates:
+      # Prefer the rightmost / longest candidate (instructor is last column)
+      instructor = max(candidates, key=lambda c: (len(c), leftover.rfind(c)))
+
+    if days or time:
+      return {'days': days, 'time': time, 'room': room, 'instructor': instructor}
+    return None
 
   for line in lines:
     for i, w in enumerate(line):
       raw_text = w['text'].upper()
-      # Handle OCR misreads for IT codes
       if raw_text.startswith(('IT', 'ICS', 'ITE', 'IBM', 'IS')):
         prefix = raw_text[:2] if raw_text.startswith('IT') else raw_text[:3]
         digits = raw_text[len(prefix):].replace('O', '0')
@@ -210,39 +296,33 @@ def extract_table_subjects(lines):
         code = raw_text
         desc_words = []
         confs = []
+        schedule_start_idx = None
 
-        # Reduced stop keywords - only stop at clear schedule indicators
-        stop_keywords = {
-            'units',
-            'unit',
-            'lecture',
-            'laboratory',
-            'instructor',
-            'room',
-            'tba',
-        }
+        stop_keywords = {'units', 'unit', 'lecture', 'laboratory', 'instructor', 'room', 'tba'}
 
-        for next_w in line[i + 1 :]:
+        for j, next_w in enumerate(line[i + 1:], start=i + 1):
           txt = next_w['text']
           clean_txt = txt.lower().replace('(', '').replace(')', '').strip()
 
-          # Stop at clear schedule indicators
+          # Stop at explicit stop keywords — schedule starts here
           if clean_txt in stop_keywords or 'room' in clean_txt:
+            schedule_start_idx = j
             break
 
-          # Stop if we hit a day pattern followed by time (schedule info)
-          if re.match(r'^(mon|tue|wed|thu|fri|sat|sun)', clean_txt) and ':' in txt:
+          # Stop at day+time pattern — schedule starts here
+          if re.match(r'^(mon|tue|wed|thu|fri|sat|sun|m|t|w|th|f|s)$', clean_txt):
+            schedule_start_idx = j
             break
 
-          # Stop if a spatial gap occurs followed by a standalone Units digit
+          # Stop at spatial gap followed by standalone units digit
           if desc_words:
-            prev_word_right = (
-                line[i + len(desc_words)]['left']
-                + line[i + len(desc_words)]['width']
-            )
-            gap = next_w['left'] - prev_word_right
-            if gap > 50 and re.fullmatch(r'[1-9]', txt):
-              break
+            prev_idx = i + len(desc_words)
+            if prev_idx < len(line):
+              prev_word_right = line[prev_idx]['left'] + line[prev_idx]['width']
+              gap = next_w['left'] - prev_word_right
+              if gap > 50 and re.fullmatch(r'[1-9]', txt):
+                schedule_start_idx = j + 1  # skip units digit
+                break
 
           desc_words.append(txt)
           if next_w['conf'] > 0:
@@ -250,18 +330,86 @@ def extract_table_subjects(lines):
 
         desc_text = ' '.join(desc_words).strip()
         desc_text = clean_subject_description(desc_text)
-
         avg_conf = sum(confs) / len(confs) if confs else 0.0
 
-        # Lower confidence threshold and accept even low confidence subjects
+        # Extract schedule from remainder of line
+        schedule = None
+        if schedule_start_idx is not None:
+          schedule = extract_schedule_from_line(line, schedule_start_idx)
+        else:
+          # Try full line after description words
+          schedule = extract_schedule_from_line(line, i + len(desc_words) + 1)
+
         if desc_text and not any(s['code'] == code for s in subjects):
           subjects.append({
               'id': f'sub-{len(subjects) + 1}',
               'code': code,
               'description': desc_text,
               'confidence': round(avg_conf, 1),
-              'needs_review': avg_conf < 40,  # Lowered threshold
+              'needs_review': avg_conf < 40,
+              'schedule': schedule,  # { days, time, room, instructor } or None
           })
+        break
+
+  # ── Second pass: fill in missing instructors from continuation lines ──────
+  # Some COR formats put the instructor on the line immediately after the subject row.
+  instructor_name_re = re.compile(
+      r'^(?:[A-Z]{2,}|[A-Z][a-z]+)(?:\s+(?:[A-Z]{2,}|[A-Z][a-z]+)){1,5}$'
+  )
+  for idx, subject in enumerate(subjects):
+    if subject['schedule'] and subject['schedule'].get('instructor'):
+      continue  # already found on same line
+
+    # Find the average Y of the line that had this subject code
+    subject_line_top = None
+    for line in lines:
+      for w in line:
+        if w['text'].upper() == subject['code']:
+          subject_line_top = sum(ww['top'] for ww in line) / len(line)
+          break
+      if subject_line_top is not None:
+        break
+
+    if subject_line_top is None:
+      continue
+
+    # Look for the next line(s) below that look like a name only
+    for line in lines:
+      line_top = sum(w['top'] for w in line) / len(line)
+      if line_top <= subject_line_top:
+        continue
+      if line_top - subject_line_top > 80:
+        break  # too far below
+
+      line_text = ' '.join(w['text'] for w in line).strip()
+
+      # Skip lines that contain another subject code
+      if any(code_pattern.match(w['text'].upper()) for w in line):
+        break
+
+      # Skip lines that look like schedule data
+      if day_pattern.search(line_text) or time_pattern.search(line_text):
+        continue
+
+      # Check if the whole line looks like a name
+      if instructor_name_re.match(line_text) and len(line_text) >= 5:
+        if subject['schedule'] is None:
+          subject['schedule'] = {'days': '', 'time': '', 'room': '', 'instructor': ''}
+        subject['schedule']['instructor'] = line_text
+        break
+
+      # Also try extracting a name from a longer continuation line
+      name_re2 = re.compile(
+          r'\b(?:[A-Z]{2,}|[A-Z][a-z]+)(?:\s+(?:[A-Z]{2,}|[A-Z][a-z]+)){1,5}\b'
+      )
+      matches2 = name_re2.findall(line_text)
+      ignore_w = {'Mon','Tue','Wed','Thu','Fri','Sat','Sun','TBA','Lab','Gym','Room','Lec'}
+      candidates2 = [m for m in matches2 if len(m) >= 5 and m not in ignore_w]
+      if candidates2:
+        best = max(candidates2, key=len)
+        if subject['schedule'] is None:
+          subject['schedule'] = {'days': '', 'time': '', 'room': '', 'instructor': ''}
+        subject['schedule']['instructor'] = best
         break
 
   return subjects

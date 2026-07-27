@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, subscribeToMessages } from '../utils/databaseService'
+import { supabase } from '../utils/supabaseClient'
+import { useToast } from '../utils/toast.jsx'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -54,60 +56,155 @@ function SendIcon(props) {
 
 // ── Thread view with real-time messaging ─────────────────────────────────
 function ThreadView({ subject, onBack }) {
-  const [messages, setMessages] = useState([])
-  const [text, setText] = useState('')
-  const [sending, setSending] = useState(false)
-  const [currentUser, setCurrentUser] = useState(null)
-  const bottomRef = useRef(null)
+  const [messages, setMessages]         = useState([])
+  const [text, setText]                 = useState('')
+  const [sending, setSending]           = useState(false)
+  const [currentUser, setCurrentUser]   = useState(null)
+  const [showNetiquette, setShowNetiquette] = useState(false)
+  const [replyTo, setReplyTo]           = useState(null)   // { id, content, senderName }
+  const [editingId, setEditingId]       = useState(null)
+  const [editText, setEditText]         = useState('')
+  const [menuMsgId, setMenuMsgId]       = useState(null)
+  const [menuPos, setMenuPos]           = useState({ x: 0, y: 0 })
+  const [seenMap, setSeenMap]           = useState({})
+  const [members, setMembers]           = useState([])   // enrolled students
+  const bottomRef  = useRef(null)
+  const inputRef   = useRef(null)
 
+  // ── Load user, messages, seen receipts, members ─────────────────────────
   useEffect(() => {
-    // Get current user for sender detection
-    import('../utils/supabaseClient').then(({ supabase }) => {
-      supabase.auth.getUser().then(({ data: { user } }) => setCurrentUser(user))
+    let uid
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setCurrentUser(user)
+      uid = user?.id
     })
 
-    // Load existing messages
-    getMessages(subject.courseId).then((result) => {
-      if (result.success) setMessages(result.messages)
+    getMessages(subject.courseId).then(({ success, messages: msgs }) => {
+      if (success) setMessages(msgs)
     })
 
-    // Subscribe to new messages in real time
-    const channel = subscribeToMessages(subject.courseId, (newMsg) => {
-      setMessages((prev) => [...prev, newMsg])
+    getSeenReceipts(subject.courseId).then(({ receipts }) => {
+      if (receipts) buildSeenMap(receipts)
     })
 
-    return () => channel.unsubscribe()
+    // Load members
+    getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+
+    // Real-time: new & updated messages
+    const msgChannel = subscribeToMessages(
+      subject.courseId,
+      (newMsg) => setMessages(prev => [...prev, newMsg]),
+      (updated) => setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
+    )
+
+    // Real-time: seen receipts
+    const seenChannel = subscribeToSeen(subject.courseId, (receipt) => {
+      setSeenMap(prev => {
+        const existing = prev[receipt.message_id] || []
+        if (existing.find(r => r.user_id === receipt.user_id)) return prev
+        return { ...prev, [receipt.message_id]: [...existing, receipt] }
+      })
+    })
+
+    // Real-time: enrollment changes (someone joins/leaves)
+    const memberChannel = subscribeToMembers(subject.courseId, () => {
+      getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+    })
+
+    return () => {
+      msgChannel.unsubscribe()
+      seenChannel.unsubscribe()
+      memberChannel.unsubscribe()
+    }
   }, [subject.courseId])
 
-  // Auto-scroll to bottom on new messages
+  // ── Mark messages as seen when they appear ──────────────────────────────
+  useEffect(() => {
+    if (!currentUser || !messages.length) return
+    const unseen = messages.filter(
+      m => m.sender_id !== currentUser.id &&
+           !m.is_deleted &&
+           !(seenMap[m.id] || []).find(r => r.user_id === currentUser.id)
+    )
+    unseen.forEach(m => markMessageSeen(m.id, currentUser.id))
+  }, [messages, currentUser]) // eslint-disable-line
+
+  const buildSeenMap = (receipts) => {
+    const map = {}
+    receipts.forEach(r => {
+      if (!map[r.message_id]) map[r.message_id] = []
+      map[r.message_id].push(r)
+    })
+    setSeenMap(map)
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
+  // Close context menu on outside click or scroll
+  useEffect(() => {
+    const close = () => setMenuMsgId(null)
+    document.addEventListener('click', close)
+    document.addEventListener('scroll', close, true)  // capture scroll anywhere
+    return () => {
+      document.removeEventListener('click', close)
+      document.removeEventListener('scroll', close, true)
+    }
+  }, [])
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSend = async (e) => {
     e.preventDefault()
     const trimmed = text.trim()
     if (!trimmed || sending) return
     setSending(true)
     setText('')
-    const result = await sendMessage(subject.courseId, trimmed)
-    if (!result.success) {
-      setText(trimmed) // restore on failure
-    }
+    setReplyTo(null)
+    const result = await sendMessage(subject.courseId, trimmed, replyTo?.id ?? null)
+    if (!result.success) setText(trimmed)
     setSending(false)
+    inputRef.current?.focus()
   }
 
-  const formatTime = (iso) => {
-    const d = new Date(iso)
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const handleEdit = async (msgId) => {
+    const trimmed = editText.trim()
+    if (!trimmed) return
+    await editMessage(msgId, trimmed)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, content: trimmed, edited_at: new Date().toISOString() } : m
+    ))
+    setEditingId(null)
+    setEditText('')
   }
 
-  const formatDate = (iso) => {
-    const d = new Date(iso)
-    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+  const handleUnsend = async (msgId) => {
+    await unsendMessage(msgId)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_deleted: true, content: '' } : m
+    ))
+    setMenuMsgId(null)
   }
 
-  // Group messages by date
+  const startEdit = (msg) => {
+    setEditingId(msg.id)
+    setEditText(msg.content)
+    setMenuMsgId(null)
+    setTimeout(() => document.getElementById(`edit-${msg.id}`)?.focus(), 50)
+  }
+
+  const startReply = (msg, senderName) => {
+    const isOwnMsg = msg.sender_id === currentUser?.id
+    const displayName = isOwnMsg ? 'You' : (senderName || 'Unknown')
+    setReplyTo({ id: msg.id, content: msg.content, senderName: displayName })
+    setMenuMsgId(null)
+    inputRef.current?.focus()
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const formatTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const formatDate = (iso) => new Date(iso).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+
   const grouped = messages.reduce((acc, msg) => {
     const date = formatDate(msg.created_at)
     if (!acc[date]) acc[date] = []
@@ -115,66 +212,307 @@ function ThreadView({ subject, onBack }) {
     return acc
   }, {})
 
-  return (
-    <div className="home__thread">
-      <div className="home__thread-header">
-        <button type="button" className="home__thread-back" onClick={onBack} aria-label="Back">
-          <BackIcon width={18} height={18} />
-        </button>
-        <div className="home__gc-icon home__gc-icon--sm">
-          <ChatIcon width={15} height={15} />
-        </div>
-        <div className="home__thread-title">
-          <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-          <span className="home__gc-desc">{subject.description}</span>
-        </div>
-      </div>
+  const schedule = subject.schedule || null
 
-      <div className="home__thread-body">
-        {messages.length === 0 && (
-          <p className="home__thread-placeholder">
-            No messages yet. Say hello to your classmates! 👋
-          </p>
+  const seenByOthers = (msgId) => {
+    const receipts = seenMap[msgId] || []
+    return receipts
+      .filter(r => r.user_id !== currentUser?.id)
+      .map(r => r.profiles?.full_name || r.profiles?.email || 'Someone')
+  }
+
+  const getReplyPreview = (replyId) => {
+    const orig = messages.find(m => m.id === replyId)
+    if (!orig) return null
+    // Try joined profile first, then fall back to checking if it's our own message
+    const isOwnMsg = orig.sender_id === currentUser?.id
+    const senderName = orig.profiles?.full_name
+      || orig.profiles?.email
+      || (isOwnMsg ? (currentUser?.user_metadata?.full_name || currentUser?.user_metadata?.name || currentUser?.email?.split('@')[0] || 'You') : null)
+      || 'Unknown'
+    return {
+      senderName: isOwnMsg ? 'You' : senderName,
+      content: orig.is_deleted ? 'Message unsent' : orig.content,
+    }
+  }
+
+  const NETIQUETTE = [
+    { icon: '🤝', text: 'Be respectful and professional in all messages.' },
+    { icon: '📝', text: 'Stay on topic — keep discussions relevant to the subject.' },
+    { icon: '🔕', text: 'Avoid sending repeated or unnecessary messages.' },
+    { icon: '✏️', text: 'Use proper grammar and avoid excessive abbreviations.' },
+    { icon: '🚫', text: 'No hate speech, harassment, or offensive content.' },
+    { icon: '📎', text: 'Cite sources when sharing information or files.' },
+    { icon: '🔒', text: 'Do not share personal information of other students.' },
+    { icon: '⏰', text: 'Respect message timing — avoid late-night non-urgent messages.' },
+  ]
+
+  return (
+    <div className="home__thread-layout">
+
+      {/* ── LEFT: Schedule + Members ── */}
+      <aside className="home__thread-aside home__thread-aside--left">
+        <div className="home__aside-header">
+          <span className="home__aside-title">📅 Schedule</span>
+        </div>
+        <div className="home__aside-body">
+          {schedule ? (
+            <div className="home__schedule-info">
+              {(schedule.days || schedule.time) && (
+                <div className="home__schedule-badge">
+                  {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                  {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                </div>
+              )}
+              {schedule.room && (
+                <div className="home__schedule-row">
+                  <span className="home__schedule-label">Room</span>
+                  <span className="home__schedule-value">{schedule.room}</span>
+                </div>
+              )}
+              <div className="home__schedule-row">
+                <span className="home__schedule-label">Instructor</span>
+                <span className="home__schedule-value">
+                  {schedule.instructor
+                    ? schedule.instructor
+                    : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                  }
+                </span>
+              </div>
+            </div>
+          ) : (
+            <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+          )}
+
+          {/* ── Members ── */}
+          <div className="home__members">
+            <div className="home__members-header">
+              <span className="home__schedule-label">Members</span>
+              <span className="home__members-count">{members.length}</span>
+            </div>
+            <div className="home__members-list">
+              {members.length === 0 && (
+                <p className="home__aside-empty">No members yet.</p>
+              )}
+              {members.map(m => {
+                const isMe = m.id === currentUser?.id
+                const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                return (
+                  <div key={m.id} className="home__member-item">
+                    <div className="home__member-avatar">
+                      {m.avatar_url
+                        ? <img src={m.avatar_url} alt={name} />
+                        : <span>{initials}</span>
+                      }
+                    </div>
+                    <span className="home__member-name">
+                      {name}{isMe && <em className="home__member-you"> (You)</em>}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      {/* ── CENTER: Chat ── */}
+      <div className="home__thread">
+        <div className="home__thread-header">
+          <button type="button" className="home__thread-back" onClick={onBack} aria-label="Back">
+            <BackIcon width={18} height={18} />
+          </button>
+          <div className="home__gc-icon home__gc-icon--sm">
+            <ChatIcon width={15} height={15} />
+          </div>
+          <div className="home__thread-title">
+            <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+            <span className="home__gc-desc">{subject.description}</span>
+          </div>
+          <button type="button"
+            className={`home__netiquette-toggle ${showNetiquette ? 'home__netiquette-toggle--active' : ''}`}
+            onClick={() => setShowNetiquette(v => !v)} title="Netiquette Guidelines">
+            📋
+          </button>
+        </div>
+
+        {showNetiquette && (
+          <div className="home__netiquette-inline">
+            <p className="home__netiquette-inline-title">Netiquette Guidelines</p>
+            {NETIQUETTE.map((item, i) => (
+              <div key={i} className="home__netiquette-inline-item">
+                <span>{item.icon}</span><span>{item.text}</span>
+              </div>
+            ))}
+          </div>
         )}
 
-        {Object.entries(grouped).map(([date, msgs]) => (
-          <div key={date}>
-            <div className="home__thread-date">{date}</div>
-            {msgs.map((msg) => {
-              const isMe = msg.sender_id === currentUser?.id
-              const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
-              return (
-                <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
-                  {!isMe && <span className="home__msg-sender">{senderName}</span>}
-                  <div className="home__msg-bubble">{msg.content}</div>
-                  <span className="home__msg-time">{formatTime(msg.created_at)}</span>
-                </div>
-              )
-            })}
+        <div className="home__thread-body">
+          {messages.length === 0 && (
+            <p className="home__thread-placeholder">No messages yet. Say hello to your classmates! 👋</p>
+          )}
+
+          {Object.entries(grouped).map(([date, msgs]) => (
+            <div key={date} className="home__msg-group">
+              <div className="home__thread-date">{date}</div>
+
+              {msgs.map((msg) => {
+                const isMe = msg.sender_id === currentUser?.id
+                const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+                const seen = seenByOthers(msg.id)
+                const replyPreview = msg.reply_to ? getReplyPreview(msg.reply_to) : null
+                const isEditing = editingId === msg.id
+
+                return (
+                  <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
+                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{senderName}</span>}
+
+                    {/* Reply preview */}
+                    {replyPreview && !msg.is_deleted && (
+                      <div className={`home__msg-reply-preview ${isMe ? 'home__msg-reply-preview--me' : ''}`}>
+                        <span className="home__msg-reply-name">{replyPreview.senderName}</span>
+                        <span className="home__msg-reply-text">{replyPreview.content}</span>
+                      </div>
+                    )}
+
+                    <div className="home__msg-row">
+                      {/* Context menu trigger */}
+                      {!msg.is_deleted && (
+                        <button
+                          type="button"
+                          className="home__msg-menu-btn"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (menuMsgId === msg.id) {
+                              setMenuMsgId(null)
+                            } else {
+                              const rect = e.currentTarget.getBoundingClientRect()
+                              // Place menu below the button, or above if too close to bottom
+                              const menuHeight = isMe ? 110 : 46 // approx: 3 items vs 1 item
+                              const spaceBelow = window.innerHeight - rect.bottom
+                              const y = spaceBelow < menuHeight + 8
+                                ? rect.top - menuHeight - 4   // flip up
+                                : rect.bottom + 4             // open down
+                              setMenuPos({ x: rect.left, y })
+                              setMenuMsgId(msg.id)
+                            }
+                          }}
+                          aria-label="Message options"
+                        >⋯</button>
+                      )}
+
+                      {/* Bubble */}
+                      {isEditing ? (
+                        <div className="home__msg-edit-wrap">
+                          <input
+                            id={`edit-${msg.id}`}
+                            className="home__msg-edit-input"
+                            value={editText}
+                            onChange={e => setEditText(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter') handleEdit(msg.id); if (e.key === 'Escape') { setEditingId(null) } }}
+                          />
+                          <div className="home__msg-edit-actions">
+                            <button type="button" onClick={() => handleEdit(msg.id)}>Save</button>
+                            <button type="button" onClick={() => setEditingId(null)}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={`home__msg-bubble ${msg.is_deleted ? 'home__msg-bubble--deleted' : ''}`}>
+                          {msg.is_deleted ? 'You unsent a message' : msg.content}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="home__msg-meta">
+                      <span className="home__msg-time">{formatTime(msg.created_at)}</span>
+                      {msg.edited_at && !msg.is_deleted && <span className="home__msg-edited">Edited</span>}
+                    </div>
+
+                    {/* Seen by — only show on sender's last seen message */}
+                    {isMe && seen.length > 0 && (
+                      <div className="home__msg-seen">
+                        Seen by {seen.length <= 2 ? seen.join(' & ') : `${seen[0]} and ${seen.length - 1} others`}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+
+        {/* ── Fixed context menu — rendered outside overflow:hidden ── */}
+        {menuMsgId && (() => {
+          const msg = messages.find(m => m.id === menuMsgId)
+          if (!msg) return null
+          const isMe = msg.sender_id === currentUser?.id
+          const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+          return (
+            <div
+              className="home__msg-menu home__msg-menu--fixed"
+              style={{ top: menuPos.y, left: menuPos.x }}
+              onClick={e => e.stopPropagation()}
+            >
+              <button type="button" onClick={() => startReply(msg, senderName)}>↩ Reply</button>
+              {isMe && <button type="button" onClick={() => startEdit(msg)}>✏️ Edit</button>}
+              {isMe && <button type="button" className="home__msg-menu-danger" onClick={() => handleUnsend(msg.id)}>🗑 Unsend</button>}
+            </div>
+          )
+        })()}
+
+        {/* Reply bar */}
+        {replyTo && (
+          <div className="home__reply-bar">
+            <div className="home__reply-bar-inner">
+              <span className="home__reply-bar-label">Replying to <strong>{replyTo.senderName}</strong></span>
+              <span className="home__reply-bar-text">{replyTo.content}</span>
+            </div>
+            <button type="button" className="home__reply-bar-cancel" onClick={() => setReplyTo(null)} aria-label="Cancel reply">✕</button>
           </div>
-        ))}
-        <div ref={bottomRef} />
+        )}
+
+        <form className="home__thread-input" onSubmit={handleSend}>
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={replyTo ? `Reply to ${replyTo.senderName}…` : 'Message…'}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            disabled={sending}
+            autoComplete="off"
+          />
+          <button type="submit" disabled={!text.trim() || sending} aria-label="Send">
+            <SendIcon width={17} height={17} />
+          </button>
+        </form>
       </div>
 
-      <form className="home__thread-input" onSubmit={handleSend}>
-        <input
-          type="text"
-          placeholder="Message…"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          disabled={sending}
-          autoComplete="off"
-        />
-        <button type="submit" disabled={!text.trim() || sending} aria-label="Send">
-          <SendIcon width={17} height={17} />
-        </button>
-      </form>
+      {/* ── RIGHT: Netiquette ── */}
+      <aside className="home__thread-aside home__thread-aside--right">
+        <div className="home__aside-header">
+          <span className="home__aside-title">📋 Netiquette</span>
+        </div>
+        <div className="home__aside-body">
+          <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
+          <div className="home__netiquette-list">
+            {NETIQUETTE.map((item, i) => (
+              <div key={i} className="home__netiquette-item">
+                <span className="home__netiquette-icon">{item.icon}</span>
+                <span className="home__netiquette-text">{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </aside>
+
     </div>
   )
 }
 
-function Home() {
-  const [view, setView] = useState('loading')   // start in loading state
+function Home({ session }) {
+  const [view, setView] = useState('loading')
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
@@ -183,18 +521,35 @@ function Home() {
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const fileInputRef = useRef(null)
+  const toast = useToast()
 
-  // On mount: load existing enrollments from DB
+  // On mount: session is guaranteed to exist (App.jsx only renders Home when
+  // session is confirmed), so go straight to fetching enrollments.
   useEffect(() => {
+    let cancelled = false
+
     const loadEnrollments = async () => {
       const result = await getStudentEnrollments()
-      if (result.success && result.enrollments?.length > 0) {
-        // Map enrollments → subject shape the rest of the UI expects
-        const loaded = result.enrollments.map((e) => ({
+      if (cancelled) return
+
+      console.log('[Home] loadEnrollments result:', result)
+
+      if (!result.success) {
+        console.error('[Home] enrollment fetch failed:', result.error)
+        if (!cancelled) setView('prompt')
+        return
+      }
+
+      // Filter to enrollments that have a valid course attached
+      const valid = (result.enrollments ?? []).filter(e => e.courses?.code)
+
+      if (valid.length > 0) {
+        const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses?.code || '',
-          description: e.courses?.title || '',
+          code: e.courses.code,
+          description: e.courses.title || e.courses.code,
           courseId: e.course_id,
+          schedule: e.courses.schedule || null,
         }))
         setSubjects(loaded)
         setView('chats')
@@ -202,8 +557,10 @@ function Home() {
         setView('prompt')
       }
     }
+
     loadEnrollments()
-  }, [])
+    return () => { cancelled = true }
+  }, [session?.user?.id])  // re-run if the logged-in user changes
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -278,6 +635,8 @@ function Home() {
 
       if (!hasSubjects) {
         setError('No subjects could be detected. Please check or add them manually.')
+      } else {
+        toast.success(`COR scanned — ${data.subjects.length} subject${data.subjects.length !== 1 ? 's' : ''} detected.`)
       }
 
       setTimeout(() => setView('review'), 250)
@@ -285,7 +644,7 @@ function Home() {
       clearInterval(timer)
       console.error(err)
       if (err.message?.includes('fetch') || err.name === 'TypeError') {
-        setError('Scanning service is unavailable. Please try again later.')
+        setError('Scanning service is unavailable. Please start the Python backend server (see backend/README.md) or check if localhost:8000 is accessible.')
       } else {
         setError('Failed to scan COR. Please try again.')
       }
@@ -314,14 +673,17 @@ function Home() {
       if (result.success) {
         // Reload from DB so the GC list is DB-driven
         const fresh = await getStudentEnrollments()
-        if (fresh.success && fresh.enrollments?.length > 0) {
-          const loaded = fresh.enrollments.map((e) => ({
+        const valid = (fresh.enrollments ?? []).filter(e => e.courses?.code)
+        if (fresh.success && valid.length > 0) {
+          const loaded = valid.map((e) => ({
             id: e.id,
-            code: e.courses?.code || '',
-            description: e.courses?.title || '',
+            code: e.courses.code,
+            description: e.courses.title || e.courses.code,
             courseId: e.course_id,
+            schedule: e.courses.schedule || null,
           }))
           setSubjects(loaded)
+          toast.success(`Joined ${loaded.length} group chat${loaded.length !== 1 ? 's' : ''}!`)
         }
         setView('chats')
       } else {
@@ -517,7 +879,7 @@ function Home() {
                     <input
                       type="text"
                       value={subject.code}
-                      onChange={(e) => updateSubject(subject.id, 'code', e.target.value)}
+                      onChange={(e) => updateSubject(subject.id, 'code', e.target.value.toUpperCase())}
                       placeholder="Code"
                     />
                     <input

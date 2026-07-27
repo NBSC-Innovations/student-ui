@@ -15,61 +15,82 @@ export async function saveStudentSubjects(studentName, subjects) {
       if (profileError) console.warn('Could not update profile name:', profileError.message)
     }
 
-    // ── Step 1: Drop all existing active enrollments for this student ──────
-    // This ensures re-uploading replaces GC membership entirely
+    // ── Step 1: Drop all existing enrollments for this student ────────────
+    // DELETE is now allowed via RLS policy added in migration.
+    // This is cleaner than UPDATE-to-dropped because it lets us re-insert fresh.
     const { error: deleteError } = await supabase
       .from('enrollments')
       .delete()
       .eq('student_id', user.id)
-      .eq('status', 'active')
 
     if (deleteError) {
-      console.error('Failed to clear old enrollments:', deleteError)
+      console.error('Failed to delete old enrollments:', deleteError)
       throw new Error('Could not reset enrollments: ' + deleteError.message)
     }
 
-    // ── Step 2: Upsert courses and create fresh enrollments ────────────────
+    console.log('[Save] Cleared old enrollments for', user.id)
+
+    // ── Step 2: Upsert courses and insert fresh enrollments ────────────────
     const savedSubjects = []
+    const errors = []
 
     for (const subject of subjects) {
-      if (!subject.code) continue
+      if (!subject.code?.trim()) continue
 
-      // Upsert course by code
-      const { data: course, error: courseError } = await supabase
+      const code = subject.code.trim().toUpperCase()
+      console.log('[Save] Processing subject:', code)
+
+      // Upsert course by code — always update title and schedule
+      const { data: courseRows, error: courseError } = await supabase
         .from('courses')
         .upsert(
-          { code: subject.code.toUpperCase(), title: subject.description || subject.code, is_active: true },
+          {
+            code,
+            title: subject.description?.trim() || code,
+            is_active: true,
+            schedule: subject.schedule ?? null,   // always write, even if null
+          },
           { onConflict: 'code', ignoreDuplicates: false }
         )
         .select('id')
-        .single()
+
+      console.log('[Save] course upsert result:', courseRows, courseError)
 
       let courseId
-      if (courseError) {
-        // Fallback: fetch existing course
-        const { data: existing } = await supabase
+      if (courseError || !courseRows?.length) {
+        // Fallback: fetch existing course by code
+        const { data: existing, error: fetchErr } = await supabase
           .from('courses')
           .select('id')
-          .eq('code', subject.code.toUpperCase())
-          .single()
-        if (!existing) { console.error('Course not found for', subject.code); continue }
+          .eq('code', code)
+          .maybeSingle()
+
+        if (fetchErr || !existing) {
+          console.error('[Save] Cannot find/create course for', code, fetchErr)
+          errors.push(code)
+          continue
+        }
         courseId = existing.id
       } else {
-        courseId = course.id
+        courseId = courseRows[0].id
       }
 
-      // Insert fresh enrollment
+      // Insert enrollment (clean insert since we deleted all above)
       const { error: enrollError } = await supabase
         .from('enrollments')
         .insert({ student_id: user.id, course_id: courseId, status: 'active' })
 
       if (enrollError) {
-        console.error('Enrollment error for', subject.code, enrollError)
+        console.error('[Save] Enrollment insert error for', code, enrollError)
+        errors.push(code)
         continue
       }
 
-      savedSubjects.push({ ...subject, courseId })
+      savedSubjects.push({ ...subject, code, courseId })
+      console.log('[Save] Saved:', code, '→', courseId)
     }
+
+    console.log(`[Save] Done: ${savedSubjects.length} saved, ${errors.length} failed`, errors)
 
     if (savedSubjects.length === 0) {
       throw new Error('No subjects could be saved. Check RLS policies or database connection.')
@@ -85,29 +106,36 @@ export async function saveStudentSubjects(studentName, subjects) {
 export async function getStudentEnrollments() {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
+    console.log('[DB] getUser ->', user?.id ?? 'NO USER', userError ?? '')
     if (userError) throw userError
     if (!user) throw new Error('User not authenticated')
 
     const { data: enrollments, error } = await supabase
       .from('enrollments')
       .select(`
-        *,
+        id,
+        course_id,
+        status,
         courses (
           id,
           code,
           title,
-          description
+          schedule
         )
       `)
       .eq('student_id', user.id)
       .eq('status', 'active')
+      .order('enrolled_at', { ascending: true })
+
+    console.log('[DB] enrollments query error:', error)
+    console.log('[DB] enrollments raw data:', JSON.stringify(enrollments, null, 2))
 
     if (error) throw error
 
-    return { success: true, enrollments }
+    return { success: true, enrollments: enrollments ?? [] }
   } catch (error) {
-    console.error('Error fetching enrollments:', error)
-    return { success: false, error: error.message }
+    console.error('[DB] getStudentEnrollments threw:', error.message)
+    return { success: false, error: error.message, enrollments: [] }
   }
 }
 
@@ -119,11 +147,11 @@ export async function getMessages(courseId) {
         id,
         content,
         created_at,
+        edited_at,
+        is_deleted,
         sender_id,
-        profiles (
-          full_name,
-          email
-        )
+        reply_to,
+        profiles ( full_name, email )
       `)
       .eq('course_id', courseId)
       .order('created_at', { ascending: true })
@@ -136,7 +164,7 @@ export async function getMessages(courseId) {
   }
 }
 
-export async function sendMessage(courseId, content) {
+export async function sendMessage(courseId, content, replyTo = null) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
@@ -144,7 +172,7 @@ export async function sendMessage(courseId, content) {
 
     const { data, error } = await supabase
       .from('gc_messages')
-      .insert({ course_id: courseId, sender_id: user.id, content })
+      .insert({ course_id: courseId, sender_id: user.id, content, reply_to: replyTo })
       .select()
       .single()
 
@@ -156,13 +184,129 @@ export async function sendMessage(courseId, content) {
   }
 }
 
-export function subscribeToMessages(courseId, onMessage) {
+export async function editMessage(messageId, newContent) {
+  try {
+    const { error } = await supabase
+      .from('gc_messages')
+      .update({ content: newContent, edited_at: new Date().toISOString() })
+      .eq('id', messageId)
+    if (error) throw error
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function unsendMessage(messageId) {
+  try {
+    const { error } = await supabase
+      .from('gc_messages')
+      .update({ is_deleted: true, content: '' })
+      .eq('id', messageId)
+    if (error) throw error
+    return { success: true }
+  } catch (error) {
+    return { success: false, error: error.message }
+  }
+}
+
+export async function markMessageSeen(messageId, userId) {
+  try {
+    await supabase
+      .from('gc_message_seen')
+      .upsert({ message_id: messageId, user_id: userId }, { onConflict: 'message_id,user_id', ignoreDuplicates: true })
+    return { success: true }
+  } catch (error) {
+    return { success: false }
+  }
+}
+
+export async function getSeenReceipts(courseId) {
+  try {
+    const { data, error } = await supabase
+      .from('gc_message_seen')
+      .select(`
+        message_id,
+        user_id,
+        seen_at,
+        profiles ( full_name, email )
+      `)
+      .in('message_id',
+        (await supabase.from('gc_messages').select('id').eq('course_id', courseId)).data?.map(m => m.id) ?? []
+      )
+    if (error) throw error
+    return { success: true, receipts: data }
+  } catch (error) {
+    return { success: false, receipts: [] }
+  }
+}
+
+export function subscribeToMessages(courseId, onInsert, onUpdate) {
   return supabase
     .channel(`gc_messages:${courseId}`)
-    .on(
-      'postgres_changes',
+    .on('postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
-      (payload) => onMessage(payload.new)
+      (payload) => onInsert(payload.new)
+    )
+    .on('postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
+      (payload) => onUpdate?.(payload.new)
+    )
+    .subscribe()
+}
+
+export function subscribeToSeen(courseId, onSeen) {
+  return supabase
+    .channel(`gc_seen:${courseId}`)
+    .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'gc_message_seen' },
+      (payload) => onSeen?.(payload.new)
+    )
+    .subscribe()
+}
+
+// Fetch all students enrolled in a course (excluding the current user)
+// Returns: { success, members: [{ id, full_name, email, avatar_url }], total }
+export async function getCourseMembers(courseId) {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    const { data, error } = await supabase
+      .from('enrollments')
+      .select(`
+        student_id,
+        profiles (
+          id,
+          full_name,
+          email,
+          avatar_url
+        )
+      `)
+      .eq('course_id', courseId)
+      .eq('status', 'active')
+
+    if (error) throw error
+
+    const members = (data ?? [])
+      .map(e => e.profiles)
+      .filter(Boolean)
+
+    return { success: true, members, total: members.length }
+  } catch (error) {
+    console.error('getCourseMembers error:', error)
+    return { success: false, members: [], total: 0 }
+  }
+}
+
+// Subscribe to enrollment changes for a course (someone joins/leaves)
+export function subscribeToMembers(courseId, onChange) {
+  return supabase
+    .channel(`enrollments:${courseId}`)
+    .on('postgres_changes',
+      { event: '*', schema: 'public', table: 'enrollments', filter: `course_id=eq.${courseId}` },
+      () => onChange?.()
     )
     .subscribe()
 }

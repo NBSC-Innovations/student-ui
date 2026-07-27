@@ -1,3 +1,4 @@
+/* ── Root layout ── */
 .app-layout {
   display: flex;
   min-height: 100vh;
@@ -13,17 +14,18 @@
   transition: margin-left 0.28s ease;
 }
 
+/* ── Top bar ── */
 .topbar {
   height: 64px;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 0 24px;
+  padding: 0 28px;
   background: #0F2854;
-  border-bottom: none;
   position: sticky;
   top: 0;
   z-index: 20;
+  flex-shrink: 0;
 }
 
 .topbar__burger {
@@ -48,6 +50,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .topbar__logo-img {
@@ -55,7 +58,7 @@
   height: 34px;
   object-fit: contain;
   border-radius: 6px;
-  background: rgba(255,255,255,0.9);
+  background: rgba(255, 255, 255, 0.9);
   padding: 2px;
   flex-shrink: 0;
 }
@@ -68,14 +71,15 @@
 }
 
 .topbar__title {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
-  color: #fff;
+  color: rgba(255, 255, 255, 0.75);
   margin: 0;
-  flex: 1;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-/* Profile chip on topbar */
+/* ── Profile chip ── */
 .topbar__profile {
   display: flex;
   align-items: center;
@@ -119,23 +123,55 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 160px;
+  max-width: 180px;
 }
 
 .topbar__user-email {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.65);
+  color: rgba(255, 255, 255, 0.6);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 160px;
+  max-width: 180px;
 }
 
+/* ── Content area — centered with max-width ── */
 .content-area {
   flex: 1;
-  padding: 28px;
+  padding: 32px 28px;
+  /* center the page content on wide screens */
+  display: flex;
+  flex-direction: column;
 }
 
+/* On the thread view (full-width 3-col), Home handles its own layout.
+   For card views (upload, prompt, review, chats list) we want a max-width. */
+.content-area > * {
+  width: 100%;
+}
+
+/* ── Large screen spacing ── */
+@media (min-width: 1400px) {
+  .content-area {
+    padding: 40px 48px;
+  }
+
+  .topbar {
+    padding: 0 48px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .content-area {
+    padding: 48px 64px;
+  }
+
+  .topbar {
+    padding: 0 64px;
+  }
+}
+
+/* ── Tablet / mobile ── */
 @media (max-width: 1024px) {
   .main-content {
     margin-left: 0;
@@ -158,6 +194,12 @@
   }
 
   .content-area {
-    padding: 18px;
+    padding: 20px 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .content-area {
+    padding: 16px 12px;
   }
 }

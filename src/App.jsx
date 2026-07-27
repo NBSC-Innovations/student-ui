@@ -5,6 +5,7 @@ import Pages from './pages/Pages.jsx'
 import Profile from './pages/Profile.jsx'
 import Login from './pages/Login.jsx'
 import { supabase } from './utils/supabaseClient'
+import { useToast } from './utils/toast.jsx'
 import NbscLogo from './assets/Nbsc-logo.png'
 import './App.css'
 
@@ -25,9 +26,11 @@ function App() {
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState('')
+  const toast = useToast()
+  // Track previous session to detect transitions
+  const [prevSession, setPrevSession] = useState(undefined)
 
   useEffect(() => {
-    // Get initial session on mount
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user?.email?.endsWith('@nbsc.edu.ph')) {
         setSession(session)
@@ -38,13 +41,37 @@ function App() {
       setLoading(false)
     })
 
-    // React to all auth changes (sign in, sign out, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       console.log('[Auth]', _event, session?.user?.email ?? 'no session')
 
       if (_event === 'SIGNED_OUT') {
-        setSession(null)
+        setSession(prev => {
+          if (prev !== null) toast.info('You have been signed out.')
+          return null
+        })
         setAuthError('')
+        setLoading(false)
+        return
+      }
+
+      if (_event === 'SIGNED_IN' && session?.user?.email) {
+        if (!session.user.email.endsWith('@nbsc.edu.ph')) {
+          supabase.auth.signOut()
+          setSession(null)
+          setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
+          toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
+        } else {
+          setSession(prev => {
+            if (!prev) {
+              const name = session.user.user_metadata?.full_name
+                || session.user.user_metadata?.name
+                || session.user.email.split('@')[0]
+              toast.success(`Welcome back, ${name}!`)
+            }
+            return session
+          })
+          setAuthError('')
+        }
         setLoading(false)
         return
       }
@@ -54,6 +81,7 @@ function App() {
           supabase.auth.signOut()
           setSession(null)
           setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
+          toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
         } else {
           setSession(session)
           setAuthError('')
@@ -65,7 +93,7 @@ function App() {
     })
 
     return () => subscription.unsubscribe()
-  }, [])
+  }, []) // eslint-disable-line
 
   const handleNavigate = (id) => {
     setActivePage(id)
@@ -91,38 +119,19 @@ function App() {
   }
 
   if (!session) {
-    return (
-      <div>
-        {authError && (
-          <div style={{
-            position: 'fixed',
-            top: '10px',
-            right: '10px',
-            background: '#ffebee',
-            border: '1px solid #f44336',
-            padding: '10px',
-            borderRadius: '4px',
-            zIndex: 1000,
-            maxWidth: '300px'
-          }}>
-            <strong>Auth Debug:</strong> {authError}
-          </div>
-        )}
-        <Login />
-      </div>
-    )
+    return <Login />
   }
 
   const renderPage = () => {
     switch (activePage) {
       case 'home':
-        return <Home />
+        return <Home session={session} />
       case 'pages':
         return <Pages />
       case 'profile':
         return <Profile session={session} />
       default:
-        return <Home />
+        return <Home session={session} />
     }
   }
 
