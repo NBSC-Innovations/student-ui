@@ -437,15 +437,16 @@ export function subscribeToSeen(courseId, onSeen) {
     .subscribe()
 }
 
-// Fetch all students enrolled in a course (excluding the current user)
-// Returns: { success, members: [{ id, full_name, email, avatar_url }], total }
+// Fetch all members in a course (students + instructor)
+// Returns: { success, members: [{ id, full_name, email, avatar_url, role }], total }
 export async function getCourseMembers(courseId) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
     if (!user) throw new Error('Not authenticated')
 
-    const { data, error } = await supabase
+    // Fetch enrolled students
+    const { data: enrollments, error: enrollError } = await supabase
       .from('enrollments')
       .select(`
         student_id,
@@ -453,17 +454,41 @@ export async function getCourseMembers(courseId) {
           id,
           full_name,
           email,
-          avatar_url
+          avatar_url,
+          role
         )
       `)
       .eq('course_id', courseId)
       .eq('status', 'active')
 
-    if (error) throw error
+    if (enrollError) throw enrollError
 
-    const members = (data ?? [])
-      .map(e => e.profiles)
+    const members = (enrollments ?? [])
+      .map(e => ({ ...e.profiles, role: e.profiles.role || 'student' }))
       .filter(Boolean)
+
+    // Fetch course instructor
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select(`
+        instructor_id,
+        profiles!instructor_id (
+          id,
+          full_name,
+          email,
+          avatar_url,
+          role
+        )
+      `)
+      .eq('id', courseId)
+      .single()
+
+    if (!courseError && course?.profiles) {
+      // Add instructor if not already in the list
+      if (!members.find(m => m.id === course.profiles.id)) {
+        members.unshift({ ...course.profiles, role: course.profiles.role || 'instructor' })
+      }
+    }
 
     return { success: true, members, total: members.length }
   } catch (error) {
@@ -520,5 +545,104 @@ export async function getRecentMessages(courseIds) {
   } catch (error) {
     logError('Error fetching recent messages:', error)
     return { success: false, error: error.message, messages: [] }
+  }
+}
+
+// Update user profile with name and avatar
+export async function updateProfile(fullName, avatarUrl) {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    const updateData = {}
+    if (fullName) updateData.full_name = fullName
+    if (avatarUrl) updateData.avatar_url = avatarUrl
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', user.id)
+
+    if (error) throw error
+
+    return { success: true }
+  } catch (error) {
+    logError('Error updating profile:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Sync profile from auth metadata (call this on app load)
+export async function syncProfileFromAuth() {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    log('[Profile] Auth user metadata:', user.user_metadata)
+    log('[Profile] Auth email:', user.email)
+
+    // Get current profile
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, avatar_url, student_id')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    if (profileError) throw profileError
+
+    log('[Profile] Current profile:', profile)
+
+    // Always try to get a better name from auth metadata
+    const authName = user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.given_name
+    const authAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture
+
+    // If auth has a name, use it (even if profile exists)
+    // If auth has no name, use email prefix but clean it up
+    const newName = authName || (user.email?.split('@')[0]?.replace(/^student/i, '').trim() || user.email?.split('@')[0])
+    const newAvatar = authAvatar || null
+
+    const needsUpdate = !profile ||
+                       !profile.full_name ||
+                       profile.full_name.startsWith('Student') ||
+                       (authName && profile.full_name !== authName) ||
+                       (authAvatar && profile.avatar_url !== authAvatar)
+
+    if (needsUpdate) {
+      const updateData = {
+        full_name: newName,
+        avatar_url: newAvatar,
+      }
+
+      log('[Profile] Update data:', updateData)
+
+      if (!profile) {
+        // Create profile if it doesn't exist
+        const { error: createError } = await supabase
+          .from('profiles')
+          .insert({
+            id: user.id,
+            email: user.email,
+            ...updateData,
+            role: 'student',
+          })
+        if (createError) throw createError
+      } else {
+        // Update existing profile
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update(updateData)
+          .eq('id', user.id)
+        if (updateError) throw updateError
+      }
+
+      log('[Profile] Synced from auth metadata')
+    }
+
+    return { success: true, profile: { ...profile, full_name: newName, avatar_url: newAvatar } }
+  } catch (error) {
+    logError('Error syncing profile:', error)
+    return { success: false, error: error.message }
   }
 }

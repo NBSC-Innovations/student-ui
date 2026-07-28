@@ -1547,6 +1547,13 @@
   font-weight: 400;
 }
 
+.home__member-instructor {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--nbsc-blue-700);
+  font-weight: 600;
+}
+
 /* ════════════════════════════════════════
    MEMBER PROFILE MODAL
    ════════════════════════════════════════ */

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -313,6 +313,7 @@ function ThreadView({ subject, onBack }) {
               )}
               {members.map(m => {
                 const isMe = m.id === currentUser?.id
+                const isInstructor = m.role === 'instructor'
                 const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
                 const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
                 return (
@@ -329,7 +330,9 @@ function ThreadView({ subject, onBack }) {
                       }
                     </div>
                     <span className="home__member-name">
-                      {name}{isMe && <em className="home__member-you"> (You)</em>}
+                      {name}
+                      {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                      {isMe && <em className="home__member-you"> (You)</em>}
                     </span>
                   </div>
                 )
@@ -605,7 +608,6 @@ function ThreadView({ subject, onBack }) {
 
 function Home({ session }) {
   const [view, setView] = useState('loading')
-  const [subView, setSubView] = useState('dashboard') // dashboard, subjects, chats
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
@@ -624,6 +626,9 @@ function Home({ session }) {
     let cancelled = false
 
     const loadEnrollments = async () => {
+      // Sync profile from auth metadata first
+      await syncProfileFromAuth()
+
       const result = await getStudentEnrollments()
       if (cancelled) return
 
@@ -772,6 +777,14 @@ function Home({ session }) {
   const confirmSubjects = async () => {
     setSaving(true)
     try {
+      // Update profile with name if provided
+      if (studentName.trim()) {
+        const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
+        if (!profileSuccess) {
+          console.error('Failed to update profile name')
+        }
+      }
+
       const result = await saveStudentSubjects(studentName, subjects)
       if (result.success) {
         // Reload from DB so the GC list is DB-driven
@@ -886,6 +899,17 @@ function Home({ session }) {
           <p className="home__subtitle">
             We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
           </p>
+
+          <div className="home__field-group">
+            <label className="home__label">Your Full Name</label>
+            <input
+              type="text"
+              className="home__input"
+              placeholder="Enter your full name"
+              value={studentName}
+              onChange={(e) => setStudentName(e.target.value)}
+            />
+          </div>
 
           {!imagePreview ? (
             <div
@@ -1054,166 +1078,44 @@ function Home({ session }) {
         <div className="home__chats">
           <div className="home__chats-header">
             <h2 className="home__title">Your Group Chats</h2>
-            <div className="home__chats-tabs">
-              <button
-                type="button"
-                className={`home__chats-tab ${subView === 'dashboard' ? 'home__chats-tab--active' : ''}`}
-                onClick={() => setSubView('dashboard')}
-              >
-                Dashboard
-              </button>
-              <button
-                type="button"
-                className={`home__chats-tab ${subView === 'subjects' ? 'home__chats-tab--active' : ''}`}
-                onClick={() => setSubView('subjects')}
-              >
-                My Subjects
-              </button>
-              <button
-                type="button"
-                className={`home__chats-tab ${subView === 'chats' ? 'home__chats-tab--active' : ''}`}
-                onClick={() => setSubView('chats')}
-              >
-                Group Chats
-              </button>
-            </div>
             <button type="button" className="home__reupload" onClick={startOver}>
               Re-upload COR
             </button>
           </div>
 
-          {subView === 'dashboard' && (
-            <div className="home__dashboard">
-              <p className="home__subtitle">
-                Welcome! You're enrolled in {subjects.length} subject{subjects.length !== 1 ? 's' : ''}.
-              </p>
-
-              {recentMessages.length > 0 && (
-                <div className="home__recent-section">
-                  <h3 className="home__section-title">Recent Activity</h3>
-                  <div className="home__recent-list">
-                    {recentMessages.slice(0, 3).map(msg => {
-                      const subject = subjects.find(s => s.courseId === msg.course_id)
-                      if (!subject) return null
-                      const isInstructor = msg.profiles?.role === 'instructor'
-                      const senderName = msg.profiles?.full_name || 'Unknown'
-                      return (
-                        <button
-                          key={msg.id}
-                          type="button"
-                          className="home__recent-card"
-                          onClick={() => openThread(subject)}
-                        >
-                          <div className="home__recent-header">
-                            <span className="home__recent-code">{subject.code}</span>
-                            <span className="home__recent-time">{formatRelativeTime(msg.created_at)}</span>
-                          </div>
-                          <div className="home__recent-sender">
-                            {isInstructor && <span className="home__recent-badge">Instructor</span>}
-                            <span>{senderName}</span>
-                          </div>
-                          <p className="home__recent-content">{msg.content}</p>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-
-              <div className="home__dashboard-actions">
-                <button
-                  type="button"
-                  className="home__btn home__btn--primary"
-                  onClick={() => setSubView('subjects')}
-                >
-                  View All Subjects
-                </button>
-              </div>
-            </div>
-          )}
-
-          {subView === 'subjects' && (
-            <div className="home__subjects-view">
-              <p className="home__subtitle">
-                All your enrolled subjects with their group chat status.
-              </p>
-
-              {subjects.length === 0 ? (
-                <p className="home__empty">No subjects found.</p>
-              ) : (
-                <div className="home__gc-list">
-                  {subjects.map((subject) => (
-                    <button
-                      key={subject.id}
-                      type="button"
-                      className="home__gc-item home__gc-item--full"
-                      onClick={() => openThread(subject)}
-                    >
-                      <div className="home__gc-icon">
-                        <ChatIcon width={18} height={18} />
-                      </div>
-                      <div className="home__gc-info">
-                        <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-                        <span className="home__gc-desc">{subject.description}</span>
-                        <span className="home__gc-status">Active</span>
-                      </div>
-                      <div className="home__gc-action">
-                        <span>Enter</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {subView === 'chats' && (
-            <div className="home__chats-view">
-              <p className="home__subtitle">
-                Group chats sorted by most recent activity.
-              </p>
-
-              {subjects.length === 0 ? (
-                <p className="home__empty">No subjects found.</p>
-              ) : (
-                <div className="home__gc-list">
-                  {[...subjects].sort((a, b) => {
-                    const msgA = recentMessages.find(m => m.course_id === a.courseId)
-                    const msgB = recentMessages.find(m => m.course_id === b.courseId)
-                    const timeA = msgA ? new Date(msgA.created_at) : new Date(0)
-                    const timeB = msgB ? new Date(msgB.created_at) : new Date(0)
-                    return timeB - timeA
-                  }).map((subject) => {
-                    const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
-                    return (
-                      <button
-                        key={subject.id}
-                        type="button"
-                        className="home__gc-item"
-                        onClick={() => openThread(subject)}
-                      >
-                        <div className="home__gc-icon">
-                          <ChatIcon width={18} height={18} />
-                        </div>
-                        <div className="home__gc-info">
-                          <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-                          <span className="home__gc-desc">{subject.description}</span>
-                          {recentMsg && (
-                            <span className="home__gc-preview">
-                              {recentMsg.content.substring(0, 50)}{recentMsg.content.length > 50 ? '...' : ''}
-                            </span>
-                          )}
-                        </div>
-                        {recentMsg && (
-                          <span className="home__gc-time">
-                            {formatRelativeTime(recentMsg.created_at)}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+          {subjects.length === 0 ? (
+            <p className="home__empty">No subjects found.</p>
+          ) : (
+            <div className="home__gc-list">
+              {subjects.map((subject) => {
+                const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
+                return (
+                  <button
+                    key={subject.id}
+                    type="button"
+                    className="home__gc-item home__gc-item--full"
+                    onClick={() => openThread(subject)}
+                  >
+                    <div className="home__gc-icon">
+                      <ChatIcon width={18} height={18} />
+                    </div>
+                    <div className="home__gc-info">
+                      <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+                      <span className="home__gc-desc">{subject.description}</span>
+                      {recentMsg && (
+                        <span className="home__gc-preview">
+                          {recentMsg.content.substring(0, 50)}{recentMsg.content.length > 50 ? '...' : ''}
+                        </span>
+                      )}
+                    </div>
+                    {recentMsg && (
+                      <span className="home__gc-time">
+                        {formatRelativeTime(recentMsg.created_at)}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
