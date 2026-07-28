@@ -1,3 +1,4 @@
+/* ── Root layout ── */
 .app-layout {
   display: flex;
   min-height: 100vh;
@@ -13,6 +14,7 @@
   transition: margin-left 0.28s ease;
 }
 
+/* ── Top bar ── */
 .topbar {
   height: 64px;
   display: flex;
@@ -20,46 +22,10 @@
   gap: 16px;
   padding: 0 28px;
   background: #0F2854;
-  border-bottom: none;
   position: sticky;
   top: 0;
   z-index: 20;
-}
-
-.topbar__brand {
-  display: none;
-  align-items: center;
-  gap: 10px;
-}
-
-.topbar__logo {
-  width: 30px;
-  height: 30px;
   flex-shrink: 0;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.15);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  font-size: 9px;
-  letter-spacing: 0.3px;
-}
-
-.topbar__brand-text {
-  font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
-}
-
-.topbar__title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #fff;
-  margin: 0;
-  flex: 1;
 }
 
 .topbar__burger {
@@ -74,18 +40,138 @@
   color: #fff;
   cursor: pointer;
   flex-shrink: 0;
-  order: 3;
 }
 
 .topbar__burger:hover {
   background: rgba(255, 255, 255, 0.1);
 }
 
-.content-area {
-  flex: 1;
-  padding: 28px;
+.topbar__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
+.topbar__logo-img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.topbar__brand-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.topbar__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+  margin: 0;
+  padding-left: 16px;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* ── Profile chip ── */
+.topbar__profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.topbar__avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.topbar__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.topbar__user-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar__user-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.topbar__user-email {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+/* ── Content area — centered with max-width ── */
+.content-area {
+  flex: 1;
+  padding: 32px 28px;
+  /* center the page content on wide screens */
+  display: flex;
+  flex-direction: column;
+}
+
+/* On the thread view (full-width 3-col), Home handles its own layout.
+   For card views (upload, prompt, review, chats list) we want a max-width. */
+.content-area > * {
+  width: 100%;
+}
+
+/* ── Large screen spacing ── */
+@media (min-width: 1400px) {
+  .content-area {
+    padding: 40px 48px;
+  }
+
+  .topbar {
+    padding: 0 48px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .content-area {
+    padding: 48px 64px;
+  }
+
+  .topbar {
+    padding: 0 64px;
+  }
+}
+
+/* ── Tablet / mobile ── */
 @media (max-width: 1024px) {
   .main-content {
     margin-left: 0;
@@ -95,22 +181,25 @@
     padding: 0 16px;
   }
 
-  .topbar__brand {
+  .topbar__burger {
     display: flex;
-    order: 1;
   }
 
   .topbar__title {
     display: none;
   }
 
-  .topbar__burger {
-    display: flex;
-    order: 2;
-    margin-left: auto;
+  .topbar__user-info {
+    display: none;
   }
 
   .content-area {
-    padding: 18px;
+    padding: 20px 16px;
+  }
+}
+
+@media (max-width: 640px) {
+  .content-area {
+    padding: 16px 12px;
   }
 }

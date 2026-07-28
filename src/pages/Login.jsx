@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
+import { useToast } from '../utils/toast.jsx'
 import NbscLogo from '../assets/Nbsc-logo.png'
 import '../styles/Login.css'
 
@@ -64,6 +65,7 @@ function Login() {
   const [mode, setMode] = useState('signin')
 
   const [email, setEmail]             = useState('')
+  const [emailError, setEmailError]   = useState('')   // inline field error
   const [password, setPassword]       = useState('')
   const [confirmPw, setConfirmPw]     = useState('')
   const [showPass, setShowPass]       = useState(false)
@@ -71,7 +73,9 @@ function Login() {
   const [loading, setLoading]         = useState(false)
   const [oauthLoading, setOauthLoading] = useState(false)
 
-  // alert state
+  const toast = useToast()
+
+  // alert state (for non-email errors inside the card)
   const [alert, setAlert] = useState(null) // { type, message }
 
   const showAlert = (type, message) => setAlert({ type, message })
@@ -79,6 +83,7 @@ function Login() {
 
   const resetTo = (nextMode) => {
     clearAlert()
+    setEmailError('')
     setPassword('')
     setConfirmPw('')
     setShowPass(false)
@@ -86,11 +91,24 @@ function Login() {
     setMode(nextMode)
   }
 
+  // Clears field error as user types a valid domain
+  const handleEmailChange = (val) => {
+    setEmail(val)
+    if (emailError && val.endsWith('@nbsc.edu.ph')) {
+      setEmailError('')
+    }
+  }
+
   const validateEmail = (val = email) => {
-    if (!val.endsWith('@nbsc.edu.ph')) {
-      showAlert('error', 'Only @nbsc.edu.ph email addresses are allowed.')
+    if (!val.trim()) {
+      setEmailError('Email address is required.')
       return false
     }
+    if (!val.endsWith('@nbsc.edu.ph')) {
+      setEmailError('Only @nbsc.edu.ph email addresses are allowed.')
+      return false
+    }
+    setEmailError('')
     return true
   }
 
@@ -291,13 +309,21 @@ function Login() {
             <input
               id="lf-email"
               type="email"
-              className="login__input"
+              className={`login__input ${emailError ? 'login__input--error' : ''}`}
               placeholder="you@nbsc.edu.ph"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => handleEmailChange(e.target.value)}
               required
               autoComplete="email"
             />
+            {emailError && (
+              <span className="login__field-error">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+                  <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+                {emailError}
+              </span>
+            )}
           </div>
 
           {!isForgot && (

@@ -1,156 +1,256 @@
--- Incremental Migration for Group Chat Functionality
--- Run this after database-schema-clean.sql to add group chat features
+-- ============================================================
+-- STUDENT MANAGEMENT SYSTEM - Simplified Database Schema
+-- Run this in Supabase SQL Editor
+-- ============================================================
+-- This schema includes only the tables used in the application:
+-- - profiles (user profiles)
+-- - courses (course information)
+-- - enrollments (student enrollments)
+-- - gc_messages (group chat messages)
+-- - gc_message_seen (message read receipts)
+-- ============================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ============================================
--- GROUP CHATS TABLE
+-- ENUMS
 -- ============================================
 
-CREATE TABLE IF NOT EXISTS public.group_chats (
+DO $$ BEGIN
+  CREATE TYPE user_role AS ENUM ('student', 'instructor', 'system_admin');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE enrollment_status AS ENUM ('pending', 'active', 'completed', 'dropped');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ============================================
+-- PROFILES TABLE (extends auth.users)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    email TEXT UNIQUE NOT NULL,
+    full_name TEXT,
+    role user_role NOT NULL DEFAULT 'student',
+    student_id TEXT UNIQUE,
+    department TEXT,
+    avatar_url TEXT,
+    bio TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- Email domain validation constraint
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_email_domain_check;
+ALTER TABLE public.profiles
+  ADD CONSTRAINT profiles_email_domain_check
+  CHECK (email LIKE '%@nbsc.edu.ph');
+
+-- ============================================
+-- COURSES TABLE
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS public.courses (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    description TEXT,
+    instructor_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    department TEXT,
+    credits INTEGER DEFAULT 3,
+    max_students INTEGER,
+    current_students INTEGER DEFAULT 0,
+    semester TEXT,
+    academic_year TEXT,
+    schedule JSONB,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- ============================================
+-- ENROLLMENTS TABLE
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS public.enrollments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    course_id UUID NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
+    status enrollment_status NOT NULL DEFAULT 'pending',
+    enrolled_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    final_grade TEXT,
+    UNIQUE(student_id, course_id)
+);
+
+-- ============================================
+-- GC MESSAGES TABLE (Group Chat Messages)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS public.gc_messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     course_id UUID NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-    UNIQUE(course_id)
-);
-
--- ============================================
--- MESSAGES TABLE
--- ============================================
-
-CREATE TABLE IF NOT EXISTS public.messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    group_chat_id UUID NOT NULL REFERENCES public.group_chats(id) ON DELETE CASCADE,
     sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     content TEXT NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    edited_at TIMESTAMPTZ,
+    reply_to UUID REFERENCES public.gc_messages(id) ON DELETE SET NULL,
+    is_deleted BOOLEAN DEFAULT false
 );
 
 -- ============================================
--- GROUP CHAT MEMBERS TABLE
+-- GC MESSAGE SEEN TABLE (Read Receipts)
 -- ============================================
 
-CREATE TABLE IF NOT EXISTS public.group_chat_members (
+CREATE TABLE IF NOT EXISTS public.gc_message_seen (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    group_chat_id UUID NOT NULL REFERENCES public.group_chats(id) ON DELETE CASCADE,
+    message_id UUID NOT NULL REFERENCES public.gc_messages(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    joined_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
-    UNIQUE(group_chat_id, user_id)
+    seen_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    UNIQUE(message_id, user_id)
 );
 
 -- ============================================
 -- INDEXES
 -- ============================================
 
-CREATE INDEX IF NOT EXISTS idx_messages_group_chat ON public.messages(group_chat_id);
-CREATE INDEX IF NOT EXISTS idx_messages_sender ON public.messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_messages_created ON public.messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_group_chat_members_group ON public.group_chat_members(group_chat_id);
-CREATE INDEX IF NOT EXISTS idx_group_chat_members_user ON public.group_chat_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
+CREATE INDEX IF NOT EXISTS idx_profiles_student_id ON public.profiles(student_id);
+CREATE INDEX IF NOT EXISTS idx_courses_instructor ON public.courses(instructor_id);
+CREATE INDEX IF NOT EXISTS idx_courses_department ON public.courses(department);
+CREATE INDEX IF NOT EXISTS idx_courses_semester ON public.courses(semester);
+CREATE INDEX IF NOT EXISTS idx_enrollments_student ON public.enrollments(student_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_course ON public.enrollments(course_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_status ON public.enrollments(status);
+CREATE INDEX IF NOT EXISTS idx_gc_messages_course ON public.gc_messages(course_id);
+CREATE INDEX IF NOT EXISTS idx_gc_messages_created ON public.gc_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_gc_message_seen_message ON public.gc_message_seen(message_id);
+CREATE INDEX IF NOT EXISTS idx_gc_message_seen_user ON public.gc_message_seen(user_id);
 
 -- ============================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ============================================
 
--- Enable RLS on new tables
-ALTER TABLE public.group_chats ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.group_chat_members ENABLE ROW LEVEL SECURITY;
+-- Enable RLS on all tables
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.courses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gc_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gc_message_seen ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
--- GROUP CHATS RLS POLICIES
+-- PROFILES RLS POLICIES
 -- ============================================
 
-DROP POLICY IF EXISTS "Users can view chats they are members of" ON public.group_chats;
-CREATE POLICY "Users can view chats they are members of"
-    ON public.group_chats FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.group_chat_members
-            WHERE group_chat_id = public.group_chats.id
-            AND user_id = auth.uid()
-        )
-    );
+DROP POLICY IF EXISTS "Users can view own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can insert own profile" ON public.profiles;
+
+CREATE POLICY "Users can view own profile"
+    ON public.profiles FOR SELECT
+    USING (auth.uid() = id);
+
+CREATE POLICY "Users can update own profile"
+    ON public.profiles FOR UPDATE
+    USING (auth.uid() = id)
+    WITH CHECK (auth.uid() = id);
+
+CREATE POLICY "Users can insert own profile"
+    ON public.profiles FOR INSERT
+    WITH CHECK (auth.uid() = id);
 
 -- ============================================
--- MESSAGES RLS POLICIES
+-- COURSES RLS POLICIES
 -- ============================================
 
-DROP POLICY IF EXISTS "Users can view messages in their chats" ON public.messages;
-CREATE POLICY "Users can view messages in their chats"
-    ON public.messages FOR SELECT
-    USING (
-        EXISTS (
-            SELECT 1 FROM public.group_chat_members
-            WHERE group_chat_id = public.messages.group_chat_id
-            AND user_id = auth.uid()
-        )
-    );
+DROP POLICY IF EXISTS "Students can view enrolled courses" ON public.courses;
+DROP POLICY IF EXISTS "Instructors can view own courses" ON public.courses;
+DROP POLICY IF EXISTS "Instructors can create courses" ON public.courses;
+DROP POLICY IF EXISTS "Instructors can update own courses" ON public.courses;
 
-DROP POLICY IF EXISTS "Users can create messages in their chats" ON public.messages;
-CREATE POLICY "Users can create messages in their chats"
-    ON public.messages FOR INSERT
-    WITH CHECK (
-        sender_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.group_chat_members
-            WHERE group_chat_id = public.messages.group_chat_id
-            AND user_id = auth.uid()
-        )
-    );
+CREATE POLICY "Students can view enrolled courses"
+    ON public.courses FOR SELECT
+    USING (auth.role() = 'authenticated');
 
--- ============================================
--- GROUP CHAT MEMBERS RLS POLICIES
--- ============================================
+CREATE POLICY "Instructors can view own courses"
+    ON public.courses FOR SELECT
+    USING (instructor_id = auth.uid());
 
-DROP POLICY IF EXISTS "Users can view their chat memberships" ON public.group_chat_members;
-CREATE POLICY "Users can view their chat memberships"
-    ON public.group_chat_members FOR SELECT
-    USING (user_id = auth.uid());
+CREATE POLICY "Instructors can create courses"
+    ON public.courses FOR INSERT
+    WITH CHECK (instructor_id = auth.uid());
+
+CREATE POLICY "Instructors can update own courses"
+    ON public.courses FOR UPDATE
+    USING (instructor_id = auth.uid())
+    WITH CHECK (instructor_id = auth.uid());
 
 -- ============================================
--- FUNCTIONS AND TRIGGERS
+-- ENROLLMENTS RLS POLICIES
 -- ============================================
 
--- Function to auto-create group chat when course is created
-CREATE OR REPLACE FUNCTION public.create_group_chat_for_course()
-RETURNS TRIGGER AS $$
-BEGIN
-    INSERT INTO public.group_chats (course_id, name)
-    VALUES (NEW.id, NEW.code || ' - ' || NEW.title)
-    ON CONFLICT (course_id) DO NOTHING;
-    
-    -- Add instructor to the group chat
-    IF NEW.instructor_id IS NOT NULL THEN
-        INSERT INTO public.group_chat_members (group_chat_id, user_id)
-        SELECT id, NEW.instructor_id FROM public.group_chats WHERE course_id = NEW.id
-        ON CONFLICT (group_chat_id, user_id) DO NOTHING;
-    END IF;
-    
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+DROP POLICY IF EXISTS "Students can view own enrollments" ON public.enrollments;
+DROP POLICY IF EXISTS "Students can create enrollment requests" ON public.enrollments;
+DROP POLICY IF EXISTS "Students can update own enrollment" ON public.enrollments;
+DROP POLICY IF EXISTS "Students can update own enrollments" ON public.enrollments;
+DROP POLICY IF EXISTS "Students can delete own enrollments" ON public.enrollments;
+DROP POLICY IF EXISTS "Students can create enrollments" ON public.enrollments;
 
--- Trigger to create group chat on course creation
-DROP TRIGGER IF EXISTS create_group_chat_on_course ON public.courses;
-CREATE TRIGGER create_group_chat_on_course
-    AFTER INSERT ON public.courses
-    FOR EACH ROW EXECUTE FUNCTION public.create_group_chat_for_course();
+CREATE POLICY "Students can view own enrollments"
+    ON public.enrollments FOR SELECT
+    USING (student_id = auth.uid());
 
--- Function to add student to group chat on enrollment
-CREATE OR REPLACE FUNCTION public.add_student_to_group_chat()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF NEW.status = 'active' THEN
-        INSERT INTO public.group_chat_members (group_chat_id, user_id)
-        SELECT id, NEW.student_id FROM public.group_chats WHERE course_id = NEW.course_id
-        ON CONFLICT (group_chat_id, user_id) DO NOTHING;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
+CREATE POLICY "Students can create enrollment requests"
+    ON public.enrollments FOR INSERT
+    WITH CHECK (student_id = auth.uid());
 
--- Trigger to add student to group chat on enrollment
-DROP TRIGGER IF EXISTS add_student_to_chat_on_enrollment ON public.enrollments;
-CREATE TRIGGER add_student_to_chat_on_enrollment
-    AFTER INSERT OR UPDATE ON public.enrollments
-    FOR EACH ROW EXECUTE FUNCTION public.add_student_to_group_chat();
+CREATE POLICY "Students can create enrollments"
+    ON public.enrollments FOR INSERT
+    WITH CHECK (student_id = auth.uid());
+
+CREATE POLICY "Students can update own enrollments"
+    ON public.enrollments FOR UPDATE
+    USING (student_id = auth.uid())
+    WITH CHECK (student_id = auth.uid());
+
+CREATE POLICY "Students can delete own enrollments"
+    ON public.enrollments FOR DELETE
+    USING (student_id = auth.uid());
+
+-- ============================================
+-- GC MESSAGES RLS POLICIES
+-- ============================================
+
+DROP POLICY IF EXISTS "Students can view course messages" ON public.gc_messages;
+DROP POLICY IF EXISTS "Students can create messages" ON public.gc_messages;
+DROP POLICY IF EXISTS "Students can update own messages" ON public.gc_messages;
+
+CREATE POLICY "Students can view course messages"
+    ON public.gc_messages FOR SELECT
+    USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Students can create messages"
+    ON public.gc_messages FOR INSERT
+    WITH CHECK (sender_id = auth.uid());
+
+CREATE POLICY "Students can update own messages"
+    ON public.gc_messages FOR UPDATE
+    USING (sender_id = auth.uid())
+    WITH CHECK (sender_id = auth.uid());
+
+-- ============================================
+-- GC MESSAGE SEEN RLS POLICIES
+-- ============================================
+
+DROP POLICY IF EXISTS "Users can view seen receipts" ON public.gc_message_seen;
+DROP POLICY IF EXISTS "Users can create seen receipts" ON public.gc_message_seen;
+
+CREATE POLICY "Users can view seen receipts"
+    ON public.gc_message_seen FOR SELECT
+    USING (auth.role() = 'authenticated');
+
+CREATE POLICY "Users can create seen receipts"
+    ON public.gc_message_seen FOR INSERT
+    WITH CHECK (user_id = auth.uid());
