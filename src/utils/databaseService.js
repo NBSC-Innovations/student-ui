@@ -10,11 +10,17 @@ const logError = (...args) => {
   if (DEBUG) console.error(...args)
 }
 
-export async function saveStudentSubjects(studentName, subjects) {
+export async function saveStudentSubjects(studentName, subjects, options = {}) {
+  const { onProgress } = options
+
   try {
+    onProgress?.({ stage: 'auth', progress: 0, total: subjects.length })
+
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
     if (!user) throw new Error('User not authenticated')
+
+    onProgress?.({ stage: 'profile', progress: 0, total: subjects.length })
 
     // Ensure profile exists (handle case where trigger didn't fire)
     const { data: existingProfile, error: profileCheckError } = await supabase
@@ -57,6 +63,8 @@ export async function saveStudentSubjects(studentName, subjects) {
       if (profileError) logError('Could not update profile:', profileError.message)
     }
 
+    onProgress?.({ stage: 'fetch_existing', progress: 0, total: subjects.length })
+
     // ── Step 1: Get existing enrollments to compare ────────────
     const { data: existingEnrollments, error: fetchEnrollError } = await supabase
       .from('enrollments')
@@ -67,6 +75,8 @@ export async function saveStudentSubjects(studentName, subjects) {
       logError('Failed to fetch existing enrollments:', fetchEnrollError)
       throw new Error('Could not fetch existing enrollments: ' + fetchEnrollError.message)
     }
+
+    onProgress?.({ stage: 'upsert_courses', progress: 0, total: validSubjects.length })
 
     // ── Step 2: Batch upsert courses ────────────────
     const validSubjects = subjects.filter(s => typeof s.code === 'string' && s.code.trim())
@@ -81,33 +91,65 @@ export async function saveStudentSubjects(studentName, subjects) {
       schedule: subject.schedule ?? null,
     }))
 
-    const { data: upsertedCourses, error: upsertError } = await supabase
-      .from('courses')
-      .upsert(courseUpserts, { onConflict: 'code', ignoreDuplicates: false })
-      .select('id, code')
+    // Chunk the upsert to handle large datasets (Supabase limit ~1000-2000 rows)
+    const CHUNK_SIZE = 500
+    let upsertError = null
+    let upsertedCount = 0
+    for (let i = 0; i < courseUpserts.length; i += CHUNK_SIZE) {
+      const chunk = courseUpserts.slice(i, i + CHUNK_SIZE)
+      const { error: chunkError } = await supabase
+        .from('courses')
+        .upsert(chunk, { onConflict: 'code', ignoreDuplicates: false })
+      if (chunkError) {
+        upsertError = chunkError
+        break
+      }
+      upsertedCount += chunk.length
+      onProgress?.({ stage: 'upsert_courses', progress: upsertedCount, total: courseUpserts.length })
+    }
 
     if (upsertError) {
       logError('Batch upsert failed:', upsertError)
       throw new Error('Could not upsert courses: ' + upsertError.message)
     }
 
+    onProgress?.({ stage: 'fetch_courses', progress: 0, total: validSubjects.length })
+
     // Fetch all courses by codes to get IDs (handles RLS not returning data)
+    // Chunk the .in() filter to handle large code lists (Supabase limit ~1000 values)
     const codes = validSubjects.map(s => s.code.trim().toUpperCase())
-    const { data: courses, error: fetchError } = await supabase
-      .from('courses')
-      .select('id, code')
-      .in('code', codes)
+    const FETCH_CHUNK_SIZE = 500
+    let allCourses = []
+    let fetchError = null
+    let fetchedCount = 0
+
+    for (let i = 0; i < codes.length; i += FETCH_CHUNK_SIZE) {
+      const codeChunk = codes.slice(i, i + FETCH_CHUNK_SIZE)
+      const { data: courses, error: chunkError } = await supabase
+        .from('courses')
+        .select('id, code')
+        .in('code', codeChunk)
+      if (chunkError) {
+        fetchError = chunkError
+        break
+      }
+      allCourses = allCourses.concat(courses || [])
+      fetchedCount += codeChunk.length
+      onProgress?.({ stage: 'fetch_courses', progress: fetchedCount, total: codes.length })
+    }
 
     if (fetchError) {
       logError('Failed to fetch courses:', fetchError)
       throw new Error('Could not fetch courses: ' + fetchError.message)
     }
 
-    const courseMap = new Map(courses?.map(c => [c.code, c.id]) || [])
+    const courseMap = new Map(allCourses?.map(c => [c.code, c.id]) || [])
 
     if (courseMap.size === 0) {
       throw new Error('No courses found in database. Check if courses table is accessible.')
     }
+
+    onProgress?.({ stage: 'insert_enrollments', progress: 0, total: validSubjects.length })
 
     // ── Step 3: Batch insert enrollments ────────────────
     const enrollments = []
@@ -127,10 +169,23 @@ export async function saveStudentSubjects(studentName, subjects) {
     }
 
     // Insert new enrollments BEFORE deleting old ones to avoid race condition
+    // Chunk the insert to handle large datasets (Supabase limit ~1000-2000 rows)
     if (enrollments.length > 0) {
-      const { error: enrollError } = await supabase
-        .from('enrollments')
-        .insert(enrollments)
+      const ENROLL_CHUNK_SIZE = 500
+      let enrollError = null
+      let insertedCount = 0
+      for (let i = 0; i < enrollments.length; i += ENROLL_CHUNK_SIZE) {
+        const chunk = enrollments.slice(i, i + ENROLL_CHUNK_SIZE)
+        const { error: chunkError } = await supabase
+          .from('enrollments')
+          .insert(chunk)
+        if (chunkError) {
+          enrollError = chunkError
+          break
+        }
+        insertedCount += chunk.length
+        onProgress?.({ stage: 'insert_enrollments', progress: insertedCount, total: enrollments.length })
+      }
 
       if (enrollError) {
         logError('Batch enrollment insert failed:', enrollError)
@@ -172,6 +227,8 @@ export async function saveStudentSubjects(studentName, subjects) {
     if (savedSubjects.length === 0) {
       throw new Error('No subjects could be saved. Check RLS policies or database connection.')
     }
+
+    onProgress?.({ stage: 'complete', progress: savedSubjects.length, total: validSubjects.length })
 
     return { success: true, subjects: savedSubjects }
   } catch (error) {
