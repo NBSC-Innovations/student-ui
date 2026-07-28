@@ -124,6 +124,7 @@ function ThreadView({ subject, onBack }) {
     if (!currentUser || !messages.length) return
     const unseen = messages.filter(
       m => m.sender_id !== currentUser.id &&
+           !m.is_deleted &&
            !(seenMap[m.id] || []).find(r => r.user_id === currentUser.id)
     )
     unseen.forEach(m => markMessageSeen(m.id, currentUser.id))
@@ -180,7 +181,9 @@ function ThreadView({ subject, onBack }) {
 
   const handleUnsend = async (msgId) => {
     await unsendMessage(msgId)
-    setMessages(prev => prev.filter(m => m.id !== msgId))
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_deleted: true, content: '' } : m
+    ))
     setMenuMsgId(null)
   }
 
@@ -230,7 +233,7 @@ function ThreadView({ subject, onBack }) {
       || 'Unknown'
     return {
       senderName: isOwnMsg ? 'You' : senderName,
-      content: orig.content,
+      content: orig.is_deleted ? 'Message unsent' : orig.content,
     }
   }
 
@@ -369,10 +372,10 @@ function ThreadView({ subject, onBack }) {
 
                 return (
                   <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
-                    {!isMe && <span className="home__msg-sender">{senderName}</span>}
+                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{senderName}</span>}
 
                     {/* Reply preview */}
-                    {replyPreview && (
+                    {replyPreview && !msg.is_deleted && (
                       <div className={`home__msg-reply-preview ${isMe ? 'home__msg-reply-preview--me' : ''}`}>
                         <span className="home__msg-reply-name">{replyPreview.senderName}</span>
                         <span className="home__msg-reply-text">{replyPreview.content}</span>
@@ -381,27 +384,29 @@ function ThreadView({ subject, onBack }) {
 
                     <div className="home__msg-row">
                       {/* Context menu trigger */}
-                      <button
-                        type="button"
-                        className="home__msg-menu-btn"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          if (menuMsgId === msg.id) {
-                            setMenuMsgId(null)
-                          } else {
-                            const rect = e.currentTarget.getBoundingClientRect()
-                            // Place menu below the button, or above if too close to bottom
-                            const menuHeight = isMe ? 110 : 46 // approx: 3 items vs 1 item
-                            const spaceBelow = window.innerHeight - rect.bottom
-                            const y = spaceBelow < menuHeight + 8
-                              ? rect.top - menuHeight - 4   // flip up
-                              : rect.bottom + 4             // open down
-                            setMenuPos({ x: rect.left, y })
-                            setMenuMsgId(msg.id)
-                          }
-                        }}
-                        aria-label="Message options"
-                      >⋯</button>
+                      {!msg.is_deleted && (
+                        <button
+                          type="button"
+                          className="home__msg-menu-btn"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (menuMsgId === msg.id) {
+                              setMenuMsgId(null)
+                            } else {
+                              const rect = e.currentTarget.getBoundingClientRect()
+                              // Place menu below the button, or above if too close to bottom
+                              const menuHeight = isMe ? 110 : 46 // approx: 3 items vs 1 item
+                              const spaceBelow = window.innerHeight - rect.bottom
+                              const y = spaceBelow < menuHeight + 8
+                                ? rect.top - menuHeight - 4   // flip up
+                                : rect.bottom + 4             // open down
+                              setMenuPos({ x: rect.left, y })
+                              setMenuMsgId(msg.id)
+                            }
+                          }}
+                          aria-label="Message options"
+                        >⋯</button>
+                      )}
 
                       {/* Bubble */}
                       {isEditing ? (
@@ -419,15 +424,15 @@ function ThreadView({ subject, onBack }) {
                           </div>
                         </div>
                       ) : (
-                        <div className="home__msg-bubble">
-                          {msg.content}
+                        <div className={`home__msg-bubble ${msg.is_deleted ? 'home__msg-bubble--deleted' : ''}`}>
+                          {msg.is_deleted ? 'You unsent a message' : msg.content}
                         </div>
                       )}
                     </div>
 
                     <div className="home__msg-meta">
                       <span className="home__msg-time">{formatTime(msg.created_at)}</span>
-                      {msg.edited_at && <span className="home__msg-edited">Edited</span>}
+                      {msg.edited_at && !msg.is_deleted && <span className="home__msg-edited">Edited</span>}
                     </div>
 
                     {/* Seen by — only show on sender's last seen message */}

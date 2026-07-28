@@ -89,6 +89,19 @@ function App() {
   }
 
   const handleLogout = async () => {
+    // Clear user's message state (edited_at, reply_to, is_deleted) from database
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        await supabase
+          .from('gc_messages')
+          .update({ edited_at: null, reply_to: null, is_deleted: false })
+          .eq('sender_id', user.id)
+      }
+    } catch (error) {
+      console.error('Failed to clear message state:', error)
+    }
+
     await supabase.auth.signOut()
     toast.info('You have been signed out.')
   }
