@@ -367,7 +367,20 @@ CREATE TABLE IF NOT EXISTS public.gc_messages (
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
     edited_at TIMESTAMPTZ,
     is_deleted BOOLEAN DEFAULT FALSE NOT NULL,
+    is_pinned BOOLEAN DEFAULT FALSE NOT NULL,
     reply_to UUID REFERENCES public.gc_messages(id) ON DELETE SET NULL
+);
+
+-- ============================================
+-- GC MESSAGE SEEN TABLE (for read receipts)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS public.gc_message_seen (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    message_id UUID NOT NULL REFERENCES public.gc_messages(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    seen_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    UNIQUE(message_id, user_id)
 );
 
 -- ============================================
@@ -409,6 +422,8 @@ CREATE INDEX IF NOT EXISTS idx_group_chat_members_group ON public.group_chat_mem
 CREATE INDEX IF NOT EXISTS idx_group_chat_members_user ON public.group_chat_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_gc_messages_course ON public.gc_messages(course_id);
 CREATE INDEX IF NOT EXISTS idx_gc_messages_created ON public.gc_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_gc_message_seen_message ON public.gc_message_seen(message_id);
+CREATE INDEX IF NOT EXISTS idx_gc_message_seen_user ON public.gc_message_seen(user_id);
 
 -- ============================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
@@ -433,6 +448,7 @@ ALTER TABLE public.group_chats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.group_chat_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gc_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.gc_message_seen ENABLE ROW LEVEL SECURITY;
 
 -- ============================================
 -- PROFILES RLS POLICIES
@@ -900,19 +916,53 @@ CREATE POLICY "Enrolled students can read messages"
             AND course_id = public.gc_messages.course_id
             AND status = 'active'
         )
+        OR EXISTS (
+            SELECT 1 FROM public.courses
+            WHERE id = public.gc_messages.course_id
+            AND instructor_id = auth.uid()
+        )
     );
 
 CREATE POLICY "Enrolled students can send messages"
     ON public.gc_messages FOR INSERT
     WITH CHECK (
         sender_id = auth.uid()
-        AND EXISTS (
-            SELECT 1 FROM public.enrollments
-            WHERE student_id = auth.uid()
-            AND course_id = public.gc_messages.course_id
-            AND status = 'active'
+        AND (
+            EXISTS (
+                SELECT 1 FROM public.enrollments
+                WHERE student_id = auth.uid()
+                AND course_id = public.gc_messages.course_id
+                AND status = 'active'
+            )
+            OR EXISTS (
+                SELECT 1 FROM public.courses
+                WHERE id = public.gc_messages.course_id
+                AND instructor_id = auth.uid()
+            )
         )
     );
+
+-- ============================================
+-- GC MESSAGE SEEN RLS POLICIES
+-- ============================================
+
+DROP POLICY IF EXISTS "Users can view seen receipts for their messages" ON public.gc_message_seen;
+DROP POLICY IF EXISTS "Users can create seen receipts" ON public.gc_message_seen;
+
+CREATE POLICY "Users can view seen receipts for their messages"
+    ON public.gc_message_seen FOR SELECT
+    USING (
+        user_id = auth.uid()
+        OR EXISTS (
+            SELECT 1 FROM public.gc_messages
+            WHERE id = public.gc_message_seen.message_id
+            AND sender_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "Users can create seen receipts"
+    ON public.gc_message_seen FOR INSERT
+    WITH CHECK (user_id = auth.uid());
 
 -- ============================================
 -- FUNCTIONS AND TRIGGERS

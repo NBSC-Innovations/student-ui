@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -187,6 +187,22 @@ function ThreadView({ subject, onBack }) {
     setMenuMsgId(null)
   }
 
+  const handlePin = async (msgId) => {
+    await pinMessage(msgId)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_pinned: true } : m
+    ))
+    setMenuMsgId(null)
+  }
+
+  const handleUnpin = async (msgId) => {
+    await unpinMessage(msgId)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_pinned: false } : m
+    ))
+    setMenuMsgId(null)
+  }
+
   const startEdit = (msg) => {
     setEditingId(msg.id)
     setEditText(msg.content)
@@ -355,6 +371,25 @@ function ThreadView({ subject, onBack }) {
         )}
 
         <div className="home__thread-body">
+          {/* Pinned Messages Section */}
+          {messages.filter(m => m.is_pinned && !m.is_deleted).length > 0 && (
+            <div className="home__pinned-section">
+              <div className="home__pinned-header">📌 Pinned Messages</div>
+              {messages.filter(m => m.is_pinned && !m.is_deleted).map(msg => {
+                const isMe = msg.sender_id === currentUser?.id
+                const isInstructor = msg.profiles?.role === 'instructor'
+                const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+                const displaySenderName = isInstructor ? `${senderName} (Instructor)` : senderName
+                return (
+                  <div key={msg.id} className={`home__pinned-message ${isMe ? 'home__pinned-message--me' : ''}`}>
+                    <span className="home__pinned-sender">{displaySenderName}</span>
+                    <span className="home__pinned-content">{msg.content}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {messages.length === 0 && (
             <p className="home__thread-placeholder">No messages yet. Say hello to your classmates! 👋</p>
           )}
@@ -365,14 +400,16 @@ function ThreadView({ subject, onBack }) {
 
               {msgs.map((msg) => {
                 const isMe = msg.sender_id === currentUser?.id
+                const isInstructor = msg.profiles?.role === 'instructor'
                 const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+                const displaySenderName = isInstructor ? `${senderName} (Instructor)` : senderName
                 const seen = seenByOthers(msg.id)
                 const replyPreview = msg.reply_to ? getReplyPreview(msg.reply_to) : null
                 const isEditing = editingId === msg.id
 
                 return (
-                  <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
-                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{senderName}</span>}
+                  <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'} ${isInstructor ? 'home__msg--instructor' : ''}`}>
+                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{displaySenderName}</span>}
 
                     {/* Reply preview */}
                     {replyPreview && !msg.is_deleted && (
@@ -454,6 +491,7 @@ function ThreadView({ subject, onBack }) {
           const msg = messages.find(m => m.id === menuMsgId)
           if (!msg) return null
           const isMe = msg.sender_id === currentUser?.id
+          const isInstructor = currentUser?.user_metadata?.role === 'instructor' || msg.profiles?.role === 'instructor'
           const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
           return (
             <div
@@ -463,6 +501,11 @@ function ThreadView({ subject, onBack }) {
             >
               <button type="button" onClick={() => startReply(msg, senderName)}>↩ Reply</button>
               {isMe && <button type="button" onClick={() => startEdit(msg)}>✏️ Edit</button>}
+              {isInstructor && (
+                <button type="button" onClick={() => msg.is_pinned ? handleUnpin(msg.id) : handlePin(msg.id)}>
+                  {msg.is_pinned ? '📌 Unpin' : '📌 Pin'}
+                </button>
+              )}
               {isMe && <button type="button" className="home__msg-menu-danger" onClick={() => handleUnsend(msg.id)}>🗑 Unsend</button>}
             </div>
           )
@@ -562,11 +605,13 @@ function ThreadView({ subject, onBack }) {
 
 function Home({ session }) {
   const [view, setView] = useState('loading')
+  const [subView, setSubView] = useState('dashboard') // dashboard, subjects, chats
   const [imageFile, setImageFile] = useState(null)
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
   const [studentName, setStudentName] = useState('')
   const [subjects, setSubjects] = useState([])
+  const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -602,6 +647,13 @@ function Home({ session }) {
           schedule: e.courses.schedule || null,
         }))
         setSubjects(loaded)
+
+        // Load recent messages for dashboard
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+
         setView('chats')
       } else {
         setView('prompt')
@@ -610,7 +662,7 @@ function Home({ session }) {
 
     loadEnrollments()
     return () => { cancelled = true }
-  }, [session?.user?.id])  // re-run if the logged-in user changes
+  }, [])  // run on mount to always fetch fresh data when returning to page
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -766,6 +818,21 @@ function Home({ session }) {
   const backToChats = () => {
     setActiveThread(null)
     setView('chats')
+  }
+
+  const formatRelativeTime = (iso) => {
+    const date = new Date(iso)
+    const now = new Date()
+    const diffMs = now - date
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMs / 3600000)
+    const diffDays = Math.floor(diffMs / 86400000)
+
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    if (diffHours < 24) return `${diffHours}h ago`
+    if (diffDays < 7) return `${diffDays}d ago`
+    return date.toLocaleDateString()
   }
 
   return (
@@ -987,29 +1054,168 @@ function Home({ session }) {
         <div className="home__chats">
           <div className="home__chats-header">
             <h2 className="home__title">Your Group Chats</h2>
+            <div className="home__chats-tabs">
+              <button
+                type="button"
+                className={`home__chats-tab ${subView === 'dashboard' ? 'home__chats-tab--active' : ''}`}
+                onClick={() => setSubView('dashboard')}
+              >
+                Dashboard
+              </button>
+              <button
+                type="button"
+                className={`home__chats-tab ${subView === 'subjects' ? 'home__chats-tab--active' : ''}`}
+                onClick={() => setSubView('subjects')}
+              >
+                My Subjects
+              </button>
+              <button
+                type="button"
+                className={`home__chats-tab ${subView === 'chats' ? 'home__chats-tab--active' : ''}`}
+                onClick={() => setSubView('chats')}
+              >
+                Group Chats
+              </button>
+            </div>
             <button type="button" className="home__reupload" onClick={startOver}>
               Re-upload COR
             </button>
           </div>
 
-          <div className="home__gc-list">
-            {subjects.map((subject) => (
-              <button
-                key={subject.id}
-                type="button"
-                className="home__gc-item"
-                onClick={() => openThread(subject)}
-              >
-                <div className="home__gc-icon">
-                  <ChatIcon width={18} height={18} />
+          {subView === 'dashboard' && (
+            <div className="home__dashboard">
+              <p className="home__subtitle">
+                Welcome! You're enrolled in {subjects.length} subject{subjects.length !== 1 ? 's' : ''}.
+              </p>
+
+              {recentMessages.length > 0 && (
+                <div className="home__recent-section">
+                  <h3 className="home__section-title">Recent Activity</h3>
+                  <div className="home__recent-list">
+                    {recentMessages.slice(0, 3).map(msg => {
+                      const subject = subjects.find(s => s.courseId === msg.course_id)
+                      if (!subject) return null
+                      const isInstructor = msg.profiles?.role === 'instructor'
+                      const senderName = msg.profiles?.full_name || 'Unknown'
+                      return (
+                        <button
+                          key={msg.id}
+                          type="button"
+                          className="home__recent-card"
+                          onClick={() => openThread(subject)}
+                        >
+                          <div className="home__recent-header">
+                            <span className="home__recent-code">{subject.code}</span>
+                            <span className="home__recent-time">{formatRelativeTime(msg.created_at)}</span>
+                          </div>
+                          <div className="home__recent-sender">
+                            {isInstructor && <span className="home__recent-badge">Instructor</span>}
+                            <span>{senderName}</span>
+                          </div>
+                          <p className="home__recent-content">{msg.content}</p>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
-                <div className="home__gc-info">
-                  <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-                  <span className="home__gc-desc">{subject.description}</span>
+              )}
+
+              <div className="home__dashboard-actions">
+                <button
+                  type="button"
+                  className="home__btn home__btn--primary"
+                  onClick={() => setSubView('subjects')}
+                >
+                  View All Subjects
+                </button>
+              </div>
+            </div>
+          )}
+
+          {subView === 'subjects' && (
+            <div className="home__subjects-view">
+              <p className="home__subtitle">
+                All your enrolled subjects with their group chat status.
+              </p>
+
+              {subjects.length === 0 ? (
+                <p className="home__empty">No subjects found.</p>
+              ) : (
+                <div className="home__gc-list">
+                  {subjects.map((subject) => (
+                    <button
+                      key={subject.id}
+                      type="button"
+                      className="home__gc-item home__gc-item--full"
+                      onClick={() => openThread(subject)}
+                    >
+                      <div className="home__gc-icon">
+                        <ChatIcon width={18} height={18} />
+                      </div>
+                      <div className="home__gc-info">
+                        <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+                        <span className="home__gc-desc">{subject.description}</span>
+                        <span className="home__gc-status">Active</span>
+                      </div>
+                      <div className="home__gc-action">
+                        <span>Enter</span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
-              </button>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
+
+          {subView === 'chats' && (
+            <div className="home__chats-view">
+              <p className="home__subtitle">
+                Group chats sorted by most recent activity.
+              </p>
+
+              {subjects.length === 0 ? (
+                <p className="home__empty">No subjects found.</p>
+              ) : (
+                <div className="home__gc-list">
+                  {[...subjects].sort((a, b) => {
+                    const msgA = recentMessages.find(m => m.course_id === a.courseId)
+                    const msgB = recentMessages.find(m => m.course_id === b.courseId)
+                    const timeA = msgA ? new Date(msgA.created_at) : new Date(0)
+                    const timeB = msgB ? new Date(msgB.created_at) : new Date(0)
+                    return timeB - timeA
+                  }).map((subject) => {
+                    const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
+                    return (
+                      <button
+                        key={subject.id}
+                        type="button"
+                        className="home__gc-item"
+                        onClick={() => openThread(subject)}
+                      >
+                        <div className="home__gc-icon">
+                          <ChatIcon width={18} height={18} />
+                        </div>
+                        <div className="home__gc-info">
+                          <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+                          <span className="home__gc-desc">{subject.description}</span>
+                          {recentMsg && (
+                            <span className="home__gc-preview">
+                              {recentMsg.content.substring(0, 50)}{recentMsg.content.length > 50 ? '...' : ''}
+                            </span>
+                          )}
+                        </div>
+                        {recentMsg && (
+                          <span className="home__gc-time">
+                            {formatRelativeTime(recentMsg.created_at)}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

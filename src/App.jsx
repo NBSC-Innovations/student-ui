@@ -126,13 +126,13 @@ function App() {
   const renderPage = () => {
     switch (activePage) {
       case 'home':
-        return <Home session={session} />
+        return <Home key="home" session={session} />
       case 'pages':
-        return <Pages />
+        return <Pages key="pages" />
       case 'profile':
-        return <Profile session={session} />
+        return <Profile key="profile" session={session} />
       default:
-        return <Home session={session} />
+        return <Home key="home" session={session} />
     }
   }
 

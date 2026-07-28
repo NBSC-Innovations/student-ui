@@ -283,9 +283,10 @@ export async function getMessages(courseId) {
         created_at,
         edited_at,
         is_deleted,
+        is_pinned,
         sender_id,
         reply_to,
-        profiles ( full_name, email )
+        profiles ( full_name, email, role )
       `)
       .eq('course_id', courseId)
       .order('created_at', { ascending: true })
@@ -342,6 +343,34 @@ export async function unsendMessage(messageId) {
     return { success: true }
   } catch (error) {
     logError('Error unsending message:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+export async function pinMessage(messageId) {
+  try {
+    const { error } = await supabase
+      .from('gc_messages')
+      .update({ is_pinned: true })
+      .eq('id', messageId)
+    if (error) throw error
+    return { success: true }
+  } catch (error) {
+    logError('Error pinning message:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+export async function unpinMessage(messageId) {
+  try {
+    const { error } = await supabase
+      .from('gc_messages')
+      .update({ is_pinned: false })
+      .eq('id', messageId)
+    if (error) throw error
+    return { success: true }
+  } catch (error) {
+    logError('Error unpinning message:', error)
     return { success: false, error: error.message }
   }
 }
@@ -452,4 +481,44 @@ export function subscribeToMembers(courseId, onChange) {
       () => onChange?.()
     )
     .subscribe()
+}
+
+// Get recent messages for dashboard preview (last message per course)
+export async function getRecentMessages(courseIds) {
+  try {
+    if (!courseIds || courseIds.length === 0) {
+      return { success: true, messages: [] }
+    }
+
+    const { data, error } = await supabase
+      .from('gc_messages')
+      .select(`
+        id,
+        content,
+        created_at,
+        course_id,
+        sender_id,
+        profiles ( full_name, role ),
+        courses ( code, title )
+      `)
+      .in('course_id', courseIds)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (error) throw error
+
+    // Get only the most recent message per course
+    const latestByCourse = {}
+    data?.forEach(msg => {
+      if (!latestByCourse[msg.course_id] || new Date(msg.created_at) > new Date(latestByCourse[msg.course_id].created_at)) {
+        latestByCourse[msg.course_id] = msg
+      }
+    })
+
+    return { success: true, messages: Object.values(latestByCourse) }
+  } catch (error) {
+    logError('Error fetching recent messages:', error)
+    return { success: false, error: error.message, messages: [] }
+  }
 }
