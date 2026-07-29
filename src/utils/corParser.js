@@ -7,8 +7,8 @@
 // Matches subject codes like "IT101", "CS 201", "GE-1", "PATHFIT2"
 const SUBJECT_CODE_PATTERN = /\b([A-Z]{2,8}[\s-]?\d{1,4}[A-Z]?)\b/
 
-// Matches section labels like "BSIT-3A", "BSCS3B", "3A"
-const SECTION_PATTERN = /\b([A-Z]{2,6}-?\d[A-Z]?)\b/
+// Matches section labels like "BSIT-3A", "BSCS3B", "3A", "ICS73"
+const SECTION_PATTERN = /\b([A-Z]{2,6}-?\d{1,3}[A-Z]?)\b/
 
 // Matches a time range like "8:00-9:00" or "08:00 AM-09:30 AM", used to trim
 // descriptions that run into schedule columns on the same line.

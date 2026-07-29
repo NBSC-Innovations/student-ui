@@ -237,62 +237,30 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
   }
 }
 
-export async function getStudentEnrollments() {
-  try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    log('[DB] getUser ->', user?.id ?? 'NO USER', userError ?? '')
-    if (userError) throw userError
-    if (!user) throw new Error('User not authenticated')
-
-    const { data: enrollments, error } = await supabase
-      .from('enrollments')
-      .select(`
-        id,
-        course_id,
-        status,
-        courses (
-          id,
-          code,
-          title,
-          schedule
-        )
-      `)
-      .eq('student_id', user.id)
-      .eq('status', 'active')
-      .order('enrolled_at', { ascending: true })
-
-    log('[DB] enrollments query error:', error)
-    log('[DB] enrollments raw data:', JSON.stringify(enrollments, null, 2))
-
-    if (error) throw error
-
-    return { success: true, enrollments: enrollments ?? [] }
-  } catch (error) {
-    logError('[DB] getStudentEnrollments threw:', error.message)
-    return { success: false, error: error.message, enrollments: [] }
-  }
-}
-
 export async function getMessages(courseId) {
   try {
+    // Use RPC function to fetch messages from gc_messages
     const { data, error } = await supabase
-      .from('gc_messages')
-      .select(`
-        id,
-        content,
-        created_at,
-        edited_at,
-        is_deleted,
-        is_pinned,
-        sender_id,
-        reply_to,
-        profiles ( full_name, email, role )
-      `)
-      .eq('course_id', courseId)
-      .order('created_at', { ascending: true })
+      .rpc('fetch_course_messages', { p_course_id: courseId })
 
     if (error) throw error
-    return { success: true, messages: data }
+
+    // Fetch sender profiles for each message
+    const messagesWithProfiles = await Promise.all(
+      (data || []).map(async (msg) => {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name, email, role')
+          .eq('id', msg.sender_id)
+          .single()
+        return {
+          ...msg,
+          profiles: profile
+        }
+      })
+    )
+
+    return { success: true, messages: messagesWithProfiles }
   } catch (error) {
     logError('Error fetching messages:', error)
     return { success: false, error: error.message }
@@ -305,11 +273,13 @@ export async function sendMessage(courseId, content, replyTo = null) {
     if (userError) throw userError
     if (!user) throw new Error('Not authenticated')
 
+    // Use RPC function to insert message into gc_messages
     const { data, error } = await supabase
-      .from('gc_messages')
-      .insert({ course_id: courseId, sender_id: user.id, content, reply_to: replyTo })
-      .select()
-      .single()
+      .rpc('insert_message', {
+        p_course_id: courseId,
+        p_sender_id: user.id,
+        p_content: content
+      })
 
     if (error) throw error
     return { success: true, message: data }
@@ -323,7 +293,7 @@ export async function editMessage(messageId, newContent) {
   try {
     const { error } = await supabase
       .from('gc_messages')
-      .update({ content: newContent, edited_at: new Date().toISOString() })
+      .update({ content: newContent, edited_at: new Date() })
       .eq('id', messageId)
     if (error) throw error
     return { success: true }
@@ -337,7 +307,7 @@ export async function unsendMessage(messageId) {
   try {
     const { error } = await supabase
       .from('gc_messages')
-      .update({ is_deleted: true, content: '' })
+      .update({ is_deleted: true })
       .eq('id', messageId)
     if (error) throw error
     return { success: true }
@@ -377,10 +347,8 @@ export async function unpinMessage(messageId) {
 
 export async function markMessageSeen(messageId, userId) {
   try {
-    const { error } = await supabase
-      .from('gc_message_seen')
-      .upsert({ message_id: messageId, user_id: userId }, { onConflict: 'message_id,user_id', ignoreDuplicates: true })
-    if (error) throw error
+    // Temporarily disabled - gc_message_seen table was dropped
+    // TODO: Re-implement message seen tracking if needed
     return { success: true }
   } catch (error) {
     logError('Error marking message as seen:', error)
@@ -389,52 +357,36 @@ export async function markMessageSeen(messageId, userId) {
 }
 
 export async function getSeenReceipts(courseId) {
-  try {
-    const { data, error } = await supabase
-      .from('gc_message_seen')
-      .select(`
-        message_id,
-        user_id,
-        seen_at,
-        profiles ( full_name, email ),
-        gc_messages!inner ( course_id )
-      `)
-      .eq('gc_messages.course_id', courseId)
-    if (error) throw error
-    return { success: true, receipts: data }
-  } catch (error) {
-    logError('getSeenReceipts error:', error)
-    return { success: false, receipts: [] }
-  }
+  // Not implemented in new schema - seen receipts not in instructor schema
+  return { success: true, receipts: [] }
 }
 
 export function subscribeToMessages(courseId, onInsert, onUpdate) {
+  // Subscribe to gc_messages table directly
   return supabase
     .channel(`gc_messages:${courseId}`)
     .on('postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
-      (payload) => onInsert(payload.new)
+      { event: 'INSERT', schema: 'public', table: 'gc_messages' },
+      (payload) => {
+        if (payload.new.course_id === courseId) {
+          onInsert(payload.new)
+        }
+      }
     )
     .on('postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
-      (payload) => onUpdate?.(payload.new)
+      { event: 'UPDATE', schema: 'public', table: 'gc_messages' },
+      (payload) => {
+        if (payload.new.course_id === courseId) {
+          onUpdate?.(payload.new)
+        }
+      }
     )
     .subscribe()
 }
 
 export function subscribeToSeen(courseId, onSeen) {
-  return supabase
-    .channel(`gc_seen:${courseId}`)
-    .on('postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'gc_message_seen',
-        filter: `message_id=in.(select id from gc_messages where course_id=eq.${courseId})`
-      },
-      (payload) => onSeen?.(payload.new)
-    )
-    .subscribe()
+  // Not implemented in new schema
+  return { unsubscribe: () => {} }
 }
 
 // Fetch all members in a course (students + instructor)
@@ -470,23 +422,23 @@ export async function getCourseMembers(courseId) {
     // Fetch course instructor
     const { data: course, error: courseError } = await supabase
       .from('courses')
-      .select(`
-        instructor_id,
-        profiles!instructor_id (
-          id,
-          full_name,
-          email,
-          avatar_url,
-          role
-        )
-      `)
+      .select('instructor_id')
       .eq('id', courseId)
       .single()
 
-    if (!courseError && course?.profiles) {
-      // Add instructor if not already in the list
-      if (!members.find(m => m.id === course.profiles.id)) {
-        members.unshift({ ...course.profiles, role: course.profiles.role || 'instructor' })
+    if (!courseError && course?.instructor_id) {
+      // Fetch instructor profile separately
+      const { data: instructor, error: instructorError } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, avatar_url, role')
+        .eq('id', course.instructor_id)
+        .single()
+
+      if (!instructorError && instructor) {
+        // Add instructor if not already in the list
+        if (!members.find(m => m.id === instructor.id)) {
+          members.unshift({ ...instructor, role: instructor.role || 'instructor' })
+        }
       }
     }
 
@@ -523,11 +475,9 @@ export async function getRecentMessages(courseIds) {
         created_at,
         course_id,
         sender_id,
-        profiles ( full_name, role ),
-        courses ( code, title )
+        is_pinned
       `)
       .in('course_id', courseIds)
-      .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(100)
 
@@ -536,15 +486,31 @@ export async function getRecentMessages(courseIds) {
     // Get only the most recent message per course
     const latestByCourse = {}
     data?.forEach(msg => {
-      if (!latestByCourse[msg.course_id] || new Date(msg.created_at) > new Date(latestByCourse[msg.course_id].created_at)) {
-        latestByCourse[msg.course_id] = msg
+      const courseId = msg.course_id
+      if (courseId && (!latestByCourse[courseId] || new Date(msg.created_at) > new Date(latestByCourse[courseId].created_at))) {
+        latestByCourse[courseId] = { ...msg }
       }
     })
 
-    return { success: true, messages: Object.values(latestByCourse) }
+    // Fetch course info and sender profiles for each message
+    const messagesWithDetails = await Promise.all(
+      Object.values(latestByCourse).map(async (msg) => {
+        const [{ data: course }, { data: profile }] = await Promise.all([
+          supabase.from('courses').select('code, title').eq('id', msg.course_id).single(),
+          supabase.from('profiles').select('full_name, role').eq('id', msg.sender_id).single()
+        ])
+        return {
+          ...msg,
+          courses: course,
+          profiles: profile
+        }
+      })
+    )
+
+    return { success: true, messages: messagesWithDetails }
   } catch (error) {
     logError('Error fetching recent messages:', error)
-    return { success: false, error: error.message, messages: [] }
+    return { success: false, messages: [] }
   }
 }
 
@@ -570,6 +536,117 @@ export async function updateProfile(fullName, avatarUrl) {
   } catch (error) {
     logError('Error updating profile:', error)
     return { success: false, error: error.message }
+  }
+}
+
+// Find section by section code and return with linked course
+export async function findSectionByCode(sectionCode) {
+  try {
+    const { data, error } = await supabase
+      .from('sections')
+      .select(`
+        id,
+        name,
+        schedule,
+        room,
+        max_capacity,
+        courses (
+          id,
+          code,
+          title
+        )
+      `)
+      .eq('name', sectionCode.trim())
+      .maybeSingle()
+
+    if (error) throw error
+
+    if (!data) {
+      return { success: false, error: 'Section not found' }
+    }
+
+    return { success: true, section: data }
+  } catch (error) {
+    logError('Error finding section:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Enroll student in a section (via its linked course)
+export async function enrollInSection(sectionId, courseId) {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    // Check if already enrolled
+    const { data: existing, error: checkError } = await supabase
+      .from('enrollments')
+      .select('id')
+      .eq('student_id', user.id)
+      .eq('course_id', courseId)
+      .maybeSingle()
+
+    if (checkError && checkError.code !== 'PGRST116') throw checkError
+
+    if (existing) {
+      return { success: true, alreadyEnrolled: true }
+    }
+
+    // Create enrollment
+    const { error: enrollError } = await supabase
+      .from('enrollments')
+      .insert({
+        student_id: user.id,
+        course_id: courseId,
+        status: 'active'
+      })
+
+    if (enrollError) throw enrollError
+
+    return { success: true, alreadyEnrolled: false }
+  } catch (error) {
+    logError('Error enrolling in section:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Get student enrollments with section information
+export async function getStudentEnrollments() {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    const { data, error } = await supabase
+      .from('enrollments')
+      .select(`
+        id,
+        course_id,
+        status,
+        courses (
+          id,
+          code,
+          title,
+          schedule,
+          sections (
+            id,
+            name,
+            room
+          )
+        )
+      `)
+      .eq('student_id', user.id)
+      .eq('status', 'active')
+
+    if (error) throw error
+
+    log('[DB] enrollments raw data:', data)
+
+    return { success: true, enrollments: data ?? [] }
+  } catch (error) {
+    logError('[DB] enrollments query error:', error)
+    return { success: false, error: error.message, enrollments: [] }
   }
 }
 

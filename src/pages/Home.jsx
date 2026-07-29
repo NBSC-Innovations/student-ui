@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -612,6 +612,7 @@ function Home({ session }) {
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
   const [studentName, setStudentName] = useState('')
+  const [sectionCode, setSectionCode] = useState('')
   const [subjects, setSubjects] = useState([])
   const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
@@ -646,10 +647,11 @@ function Home({ session }) {
       if (valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.code,
+          code: e.courses.sections?.name || e.courses.code,
           description: e.courses.title || e.courses.code,
           courseId: e.course_id,
-          schedule: e.courses.schedule || null,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
         }))
         setSubjects(loaded)
 
@@ -774,6 +776,78 @@ function Home({ session }) {
     ])
   }
 
+  const joinBySectionCode = async () => {
+    if (!sectionCode.trim()) {
+      setError('Please enter a section code')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const { success, section, error: findError } = await findSectionByCode(sectionCode.trim())
+
+      if (!success) {
+        setError(findError || 'Section not found. Please check the code and try again.')
+        setSaving(false)
+        return
+      }
+
+      if (!section?.courses) {
+        setError('Section has no linked course. Please contact your instructor.')
+        setSaving(false)
+        return
+      }
+
+      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(
+        section.id,
+        section.courses.id
+      )
+
+      if (!enrollSuccess) {
+        setError(enrollError || 'Failed to join section')
+        setSaving(false)
+        return
+      }
+
+      if (alreadyEnrolled) {
+        toast.success('You are already enrolled in this section')
+      } else {
+        toast.success(`Successfully joined ${section.name}`)
+      }
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.courses.sections?.name || e.courses.code,
+          description: e.courses.title || e.courses.code,
+          courseId: e.course_id,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+        }))
+        setSubjects(loaded)
+
+        // Load recent messages
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setSectionCode('')
+      setView('chats')
+    } catch (err) {
+      console.error(err)
+      setError('Failed to join section')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const confirmSubjects = async () => {
     setSaving(true)
     try {
@@ -785,29 +859,57 @@ function Home({ session }) {
         }
       }
 
-      const result = await saveStudentSubjects(studentName, subjects)
-      if (result.success) {
-        // Reload from DB so the GC list is DB-driven
-        const fresh = await getStudentEnrollments()
-        const valid = (fresh.enrollments ?? []).filter(e => e.courses?.code)
-        if (fresh.success && valid.length > 0) {
-          const loaded = valid.map((e) => ({
-            id: e.id,
-            code: e.courses.code,
-            description: e.courses.title || e.courses.code,
-            courseId: e.course_id,
-            schedule: e.courses.schedule || null,
-          }))
-          setSubjects(loaded)
-          toast.success(`Joined ${loaded.length} group chat${loaded.length !== 1 ? 's' : ''}!`)
+      // Process each subject as a section code
+      const results = []
+      for (const subject of subjects) {
+        if (!subject.code?.trim()) continue
+
+        const { success, section, error: findError } = await findSectionByCode(subject.code.trim())
+        if (!success || !section?.courses) {
+          console.error(`Failed to find section ${subject.code}:`, findError)
+          continue
         }
-        setView('chats')
-      } else {
-        setError('Failed to save subjects: ' + result.error)
+
+        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(
+          section.id,
+          section.courses.id
+        )
+        if (enrollSuccess && !alreadyEnrolled) {
+          results.push(section.name)
+        }
       }
+
+      if (results.length > 0) {
+        toast.success(`Joined ${results.length} section${results.length !== 1 ? 's' : ''}: ${results.join(', ')}`)
+      } else {
+        toast.info('No new sections joined')
+      }
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.courses.sections?.name || e.courses.code,
+          description: e.courses.title || e.courses.code,
+          courseId: e.course_id,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+        }))
+        setSubjects(loaded)
+
+        // Load recent messages
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setView('chats')
     } catch (err) {
       console.error(err)
-      setError('Failed to save subjects to database')
+      setError('Failed to join sections')
     } finally {
       setSaving(false)
     }
@@ -818,6 +920,7 @@ function Home({ session }) {
     setImageFile(null)
     setImagePreview(null)
     setStudentName('')
+    setSectionCode('')
     setError('')
     setProgress(0)
     // Don't clear subjects — keep existing enrollments visible
@@ -864,16 +967,48 @@ function Home({ session }) {
           </div>
           <h2 className="home__title">You haven't joined any group chats yet</h2>
           <p className="home__subtitle">
-            Upload your Certificate of Registration (COR) and we'll automatically find and join the
-            group chats for your enrolled subjects.
+            Join your class by entering the section code provided by your instructor (e.g., BSIT 3A).
           </p>
+
+          <div className="home__field-group" style={{ width: '100%', maxWidth: '300px' }}>
+            <input
+              type="text"
+              className="home__input"
+              placeholder="Enter section code"
+              value={sectionCode}
+              onChange={(e) => setSectionCode(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
+              disabled={saving}
+            />
+          </div>
+
           <button
             type="button"
             className="home__btn home__btn--primary"
-            onClick={() => setView('upload')}
+            onClick={joinBySectionCode}
+            disabled={saving || !sectionCode.trim()}
+            style={{ width: '100%', maxWidth: '300px' }}
           >
-            Find your GC
+            {saving ? 'Joining...' : 'Join Section'}
           </button>
+
+          {error && (
+            <p className="home__error" style={{ marginTop: '12px' }}>{error}</p>
+          )}
+
+          <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)', width: '100%' }}>
+            <p className="home__subtitle" style={{ marginBottom: '12px' }}>
+              Or upload your Certificate of Registration (COR) to automatically find your sections.
+            </p>
+            <button
+              type="button"
+              className="home__btn home__btn--secondary"
+              onClick={() => setView('upload')}
+              style={{ width: '100%', maxWidth: '300px' }}
+            >
+              Upload COR
+            </button>
+          </div>
         </div>
       )}
 
@@ -897,19 +1032,8 @@ function Home({ session }) {
 
           <h2 className="home__title">Upload Your Certificate of Registration</h2>
           <p className="home__subtitle">
-            We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
+            We'll scan your COR to automatically find and join the group chats for your enrolled sections.
           </p>
-
-          <div className="home__field-group">
-            <label className="home__label">Your Full Name</label>
-            <input
-              type="text"
-              className="home__input"
-              placeholder="Enter your full name"
-              value={studentName}
-              onChange={(e) => setStudentName(e.target.value)}
-            />
-          </div>
 
           {!imagePreview ? (
             <div
@@ -978,7 +1102,7 @@ function Home({ session }) {
       {saving && (
         <div className="home__card home__card--center">
           <div className="home__spinner" />
-          <h2 className="home__title">Joining Group Chats</h2>
+          <h2 className="home__title">Joining Sections</h2>
           <p className="home__subtitle">This may take a few seconds…</p>
         </div>
       )}
@@ -1017,11 +1141,11 @@ function Home({ session }) {
               </div>
 
               <span className="home__panel-title" style={{ marginTop: '16px' }}>
-                Enrolled Subjects
+                Detected Section Codes
               </span>
               <div className="home__table">
                 <div className="home__table-header">
-                  <span>Code</span>
+                  <span>Section Code</span>
                   <span>Description</span>
                   <span></span>
                 </div>
@@ -1066,7 +1190,7 @@ function Home({ session }) {
                   onClick={confirmSubjects}
                   disabled={subjects.length === 0 || saving}
                 >
-                  {saving ? 'Joining Group Chats...' : 'Confirm & Join Group Chats'}
+                  {saving ? 'Joining Sections...' : 'Confirm & Join Sections'}
                 </button>
               </div>
             </div>
@@ -1077,14 +1201,14 @@ function Home({ session }) {
       {view === 'chats' && (
         <div className="home__chats">
           <div className="home__chats-header">
-            <h2 className="home__title">Your Group Chats</h2>
+            <h2 className="home__title">Your Sections</h2>
             <button type="button" className="home__reupload" onClick={startOver}>
               Re-upload COR
             </button>
           </div>
 
           {subjects.length === 0 ? (
-            <p className="home__empty">No subjects found.</p>
+            <p className="home__empty">No sections found.</p>
           ) : (
             <div className="home__gc-list">
               {subjects.map((subject) => {
