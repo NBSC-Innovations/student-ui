@@ -611,6 +611,26 @@ export async function enrollInSection(sectionId, courseId) {
   }
 }
 
+export async function leaveSection(courseId) {
+  try {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return { success: false, error: 'User not authenticated' }
+
+    // Delete enrollment record for this student and course
+    const { error } = await supabase
+      .from('enrollments')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('course_id', courseId)
+
+    if (error) throw error
+    return { success: true }
+  } catch (err) {
+    console.error('Error leaving section:', err)
+    return { success: false, error: err.message }
+  }
+}
+
 // Get student enrollments with section information
 export async function getStudentEnrollments() {
   try {

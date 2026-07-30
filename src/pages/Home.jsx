@@ -845,7 +845,10 @@ function Home({ session }) {
 
   const confirmSubjects = async () => {
     setSaving(true)
+    setError('')
+
     try {
+      // 1. Update profile name if provided
       if (studentName.trim()) {
         const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
         if (!profileSuccess) {
@@ -853,31 +856,43 @@ function Home({ session }) {
         }
       }
 
-      const results = []
-      for (const subject of subjects) {
-        if (!subject.code?.trim()) continue
+      // 2. Process each subject section code
+      const joinedSections = []
+      const notFoundSections = []
 
-        const { success, section, error: findError } = await findSectionByCode(subject.code.trim())
+      for (const subject of subjects) {
+        const code = subject.code?.trim()
+        if (!code) continue
+
+        const { success, section, error: findError } = await findSectionByCode(code)
+        
+        // If section is not found in database
         if (!success || !section?.courses) {
-          console.error(`Failed to find section ${subject.code}:`, findError)
+          console.error(`Failed to find section ${code}:`, findError)
+          notFoundSections.push(code)
+          toast.error(`Subject code "${code}" not found. Please check and try again.`) // <--- TOAST FOR NOT FOUND
           continue
         }
 
+        // Enroll in section
         const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(
           section.id,
           section.courses.id
         )
+
         if (enrollSuccess && !alreadyEnrolled) {
-          results.push(section.name)
+          joinedSections.push(section.name)
         }
       }
 
-      if (results.length > 0) {
-        toast.success(`Joined ${results.length} section${results.length !== 1 ? 's' : ''}: ${results.join(', ')}`)
-      } else {
-        toast.info('No new sections joined')
+      // 3. Feedback notifications
+      if (joinedSections.length > 0) {
+        toast.success(`Joined ${joinedSections.length} section${joinedSections.length !== 1 ? 's' : ''}: ${joinedSections.join(', ')}`)
+      } else if (notFoundSections.length === 0) {
+        toast.info('No new sections joined.')
       }
 
+      // 4. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
       const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
       if (fresh.success && valid.length > 0) {
@@ -901,6 +916,7 @@ function Home({ session }) {
     } catch (err) {
       console.error(err)
       setError('Failed to join sections')
+      toast.error('An error occurred while joining sections.')
     } finally {
       setSaving(false)
     }
