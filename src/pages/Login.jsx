@@ -50,15 +50,13 @@ function Alert({ type, message, onClose }) {
 
 /* ── Login page ─────────────────────────────────────────────────────────── */
 function Login() {
-  // 'signin' | 'signup' | 'confirm' | 'forgot' | 'forgot-sent'
+  // 'signin' | 'signup' | 'forgot' | 'forgot-sent'
   const [mode, setMode] = useState('signin')
 
   const [email, setEmail]             = useState('')
   const [emailError, setEmailError]   = useState('')   // inline field error
   const [password, setPassword]       = useState('')
-  const [confirmPw, setConfirmPw]     = useState('')
   const [showPass, setShowPass]       = useState(false)
-  const [showConfirm, setShowConfirm] = useState(false)
   const [loading, setLoading]         = useState(false)
 
   const toast = useToast()
@@ -73,9 +71,7 @@ function Login() {
     clearAlert()
     setEmailError('')
     setPassword('')
-    setConfirmPw('')
     setShowPass(false)
-    setShowConfirm(false)
     setMode(nextMode)
   }
 
@@ -96,6 +92,11 @@ function Login() {
       setEmailError('Only @nbsc.edu.ph email addresses are allowed.')
       return false
     }
+    const localPart = val.split('@')[0]
+    if (!/^\d+$/.test(localPart)) {
+      setEmailError('Only numeric email addresses are allowed (e.g., 12345678@nbsc.edu.ph).')
+      return false
+    }
     setEmailError('')
     return true
   }
@@ -107,6 +108,20 @@ function Login() {
     if (!validateEmail()) return
     setLoading(true)
     try {
+      // Check if user exists in profiles table first (using RPC to bypass RLS)
+      const { data: userExists, error: checkError } = await supabase
+        .rpc('check_user_exists', { p_email: email })
+
+      if (checkError) {
+        console.error('[SignIn] check_user_exists error:', checkError)
+      }
+
+      if (!userExists) {
+        showAlert('error', 'User account not found. Please sign up first.')
+        setLoading(false)
+        return
+      }
+
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       console.log('[SignIn] data:', JSON.stringify(data))
       console.log('[SignIn] error:', error)
@@ -119,14 +134,22 @@ function Login() {
         return
       }
 
+      // Check if email is verified
+      if (!data.user.email_confirmed_at) {
+        await supabase.auth.signOut()
+        showAlert('error', 'Please confirm your email first. Check your inbox for the confirmation link.')
+        setLoading(false)
+        return
+      }
+
       showAlert('success', 'Signed in successfully! Redirecting…')
       // onAuthStateChange in App.jsx handles the redirect
     } catch (err) {
       let msg = err.message || 'Invalid email or password.'
       if (msg.toLowerCase().includes('invalid login credentials'))
-        msg = 'Incorrect email or password. If you just signed up, confirm your email first.'
+        msg = 'Incorrect email or password.'
       else if (msg.toLowerCase().includes('email not confirmed'))
-        msg = 'Please click the confirmation link in your inbox before signing in.'
+        msg = 'Please confirm your email first. Check your inbox for the confirmation link.'
       showAlert('error', msg)
       setLoading(false)
     }
@@ -140,7 +163,8 @@ function Login() {
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/`
+          redirectTo: `${window.location.origin}/`,
+          skipBrowserRedirect: false
         }
       })
       if (error) throw error
@@ -157,7 +181,6 @@ function Login() {
     clearAlert()
     if (!validateEmail()) return
     if (password.length < 8) { showAlert('error', 'Password must be at least 8 characters.'); return }
-    if (password !== confirmPw) { showAlert('error', 'Passwords do not match.'); return }
     setLoading(true)
     try {
       console.log('[SignUp] attempting with:', email)
@@ -173,14 +196,33 @@ function Login() {
         return
       }
 
+      if (data?.user) {
+        // Create profile record
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: data.user.id,
+            email: data.user.email,
+            role: 'student',
+            student_id: email.split('@')[0] // Use numeric part as student ID
+          })
+
+        if (profileError) {
+          console.error('[SignUp] profile creation error:', profileError)
+          showAlert('error', 'Account created but profile setup failed. Please contact administrator.')
+          setLoading(false)
+          return
+        }
+      }
+
       if (data?.session) {
         // Confirmation off — immediately signed in
         showAlert('success', 'Account created! Signing you in…')
         // App.jsx onAuthStateChange handles redirect
       } else if (data?.user) {
         // Confirmation on — need to verify email
-        showAlert('success', `Check ${email} for a confirmation link.`)
-        setMode('confirm')
+        showAlert('success', `Check ${email} for a confirmation link to activate your account.`)
+        resetTo('signin')
       } else {
         showAlert('error', 'Unexpected response from server. Please try again.')
       }
@@ -214,19 +256,16 @@ function Login() {
     }
   }
 
-  /* ── Info screens (confirm / forgot-sent) ────────────────────────────── */
-  if (mode === 'confirm' || mode === 'forgot-sent') {
-    const isConfirm = mode === 'confirm'
+  /* ── Info screens (forgot-sent) ───────────────────────────────────────── */
+  if (mode === 'forgot-sent') {
     return (
       <div className="login">
         {alert && <Alert {...alert} onClose={clearAlert} />}
         <div className="login__card login__card--centered">
-          <div className="login__confirm-icon">{isConfirm ? '📬' : '🔑'}</div>
-          <h2 className="login__title">{isConfirm ? 'Check your email' : 'Reset link sent'}</h2>
+          <div className="login__confirm-icon">🔑</div>
+          <h2 className="login__title">Reset link sent</h2>
           <p className="login__subtitle">
-            {isConfirm
-              ? <><strong>{email}</strong> — click the confirmation link to activate your account, then sign in.</>
-              : <><strong>{email}</strong> — click the reset link to set a new password.</>}
+            <><strong>{email}</strong> — click the reset link to set a new password.</>
           </p>
           <button type="button" className="login__link-btn" onClick={() => resetTo('signin')}>
             ← Back to sign in
@@ -322,33 +361,11 @@ function Login() {
             </div>
           )}
 
-          {isSignUp && (
-            <div className="login__field">
-              <label className="login__label" htmlFor="lf-confirm">Confirm password</label>
-              <div className="login__input-wrap">
-                <input
-                  id="lf-confirm"
-                  type={showConfirm ? 'text' : 'password'}
-                  className="login__input login__input--pass"
-                  placeholder="Repeat your password"
-                  value={confirmPw}
-                  onChange={(e) => setConfirmPw(e.target.value)}
-                  required
-                  autoComplete="new-password"
-                />
-                <button type="button" className="login__eye"
-                  onClick={() => setShowConfirm(v => !v)}
-                  aria-label={showConfirm ? 'Hide' : 'Show'}>
-                  <EyeIcon open={showConfirm} />
-                </button>
-              </div>
-            </div>
-          )}
 
           <button type="submit" className="login__submit-btn" disabled={loading}>
             {loading
-              ? (isForgot ? 'Sending…' : isSignUp ? 'Creating account…' : 'Signing in…')
-              : (isForgot ? 'Send reset link' : isSignUp ? 'Create account' : 'Sign in')}
+              ? (isForgot ? 'Sending…' : isSignUp ? 'Creating account…' : 'Logging in…')
+              : (isForgot ? 'Send reset link' : isSignUp ? 'Create account' : 'Login')}
           </button>
 
           {!isForgot && (
@@ -399,7 +416,7 @@ function Login() {
             </>
           ) : (
             <>Don't have an account?{' '}
-              <button type="button" className="login__link-btn" onClick={() => resetTo('signup')}>Create one</button>
+              <button type="button" className="login__link-btn" onClick={() => resetTo('signup')}>Sign in</button>
             </>
           )}
         </p>

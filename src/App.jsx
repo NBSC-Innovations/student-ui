@@ -41,7 +41,7 @@ function App() {
       setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       console.log('[Auth]', _event, session?.user?.email ?? 'no session')
 
       if (_event === 'SIGNED_OUT') {
@@ -58,6 +58,42 @@ function App() {
           setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
           toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
         } else {
+          // Check if user signed in with Google and sync metadata to profile
+          const identities = session.user.identities || []
+          const googleIdentity = identities.find(id => id.provider === 'google')
+
+          if (googleIdentity) {
+            // Sync Google metadata to profile
+            const { data: existingProfile } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('id', session.user.id)
+              .single()
+
+            if (existingProfile) {
+              // Update profile with Google metadata
+              await supabase
+                .from('profiles')
+                .update({
+                  full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name,
+                  avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture
+                })
+                .eq('id', session.user.id)
+            } else {
+              // Create profile with Google metadata
+              await supabase
+                .from('profiles')
+                .insert({
+                  id: session.user.id,
+                  email: session.user.email,
+                  full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name,
+                  avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture,
+                  role: 'student',
+                  student_id: session.user.email.split('@')[0]
+                })
+            }
+          }
+
           setSession(session)
           setAuthError('')
         }
