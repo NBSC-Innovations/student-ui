@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -187,6 +187,22 @@ function ThreadView({ subject, onBack }) {
     setMenuMsgId(null)
   }
 
+  const handlePin = async (msgId) => {
+    await pinMessage(msgId)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_pinned: true } : m
+    ))
+    setMenuMsgId(null)
+  }
+
+  const handleUnpin = async (msgId) => {
+    await unpinMessage(msgId)
+    setMessages(prev => prev.map(m =>
+      m.id === msgId ? { ...m, is_pinned: false } : m
+    ))
+    setMenuMsgId(null)
+  }
+
   const startEdit = (msg) => {
     setEditingId(msg.id)
     setEditText(msg.content)
@@ -297,6 +313,7 @@ function ThreadView({ subject, onBack }) {
               )}
               {members.map(m => {
                 const isMe = m.id === currentUser?.id
+                const isInstructor = m.role === 'instructor'
                 const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
                 const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
                 return (
@@ -313,7 +330,9 @@ function ThreadView({ subject, onBack }) {
                       }
                     </div>
                     <span className="home__member-name">
-                      {name}{isMe && <em className="home__member-you"> (You)</em>}
+                      {name}
+                      {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                      {isMe && <em className="home__member-you"> (You)</em>}
                     </span>
                   </div>
                 )
@@ -355,6 +374,25 @@ function ThreadView({ subject, onBack }) {
         )}
 
         <div className="home__thread-body">
+          {/* Pinned Messages Section */}
+          {messages.filter(m => m.is_pinned && !m.is_deleted).length > 0 && (
+            <div className="home__pinned-section">
+              <div className="home__pinned-header">📌 Pinned Messages</div>
+              {messages.filter(m => m.is_pinned && !m.is_deleted).map(msg => {
+                const isMe = msg.sender_id === currentUser?.id
+                const isInstructor = msg.profiles?.role === 'instructor'
+                const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+                const displaySenderName = isInstructor ? `${senderName} (Instructor)` : senderName
+                return (
+                  <div key={msg.id} className={`home__pinned-message ${isMe ? 'home__pinned-message--me' : ''}`}>
+                    <span className="home__pinned-sender">{displaySenderName}</span>
+                    <span className="home__pinned-content">{msg.content}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {messages.length === 0 && (
             <p className="home__thread-placeholder">No messages yet. Say hello to your classmates! 👋</p>
           )}
@@ -365,14 +403,16 @@ function ThreadView({ subject, onBack }) {
 
               {msgs.map((msg) => {
                 const isMe = msg.sender_id === currentUser?.id
+                const isInstructor = msg.profiles?.role === 'instructor'
                 const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
+                const displaySenderName = isInstructor ? `${senderName} (Instructor)` : senderName
                 const seen = seenByOthers(msg.id)
                 const replyPreview = msg.reply_to ? getReplyPreview(msg.reply_to) : null
                 const isEditing = editingId === msg.id
 
                 return (
-                  <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'}`}>
-                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{senderName}</span>}
+                  <div key={msg.id} className={`home__msg ${isMe ? 'home__msg--me' : 'home__msg--them'} ${isInstructor ? 'home__msg--instructor' : ''}`}>
+                    {!isMe && !msg.is_deleted && <span className="home__msg-sender">{displaySenderName}</span>}
 
                     {/* Reply preview */}
                     {replyPreview && !msg.is_deleted && (
@@ -454,6 +494,7 @@ function ThreadView({ subject, onBack }) {
           const msg = messages.find(m => m.id === menuMsgId)
           if (!msg) return null
           const isMe = msg.sender_id === currentUser?.id
+          const isInstructor = currentUser?.user_metadata?.role === 'instructor' || msg.profiles?.role === 'instructor'
           const senderName = msg.profiles?.full_name || msg.profiles?.email || 'Unknown'
           return (
             <div
@@ -463,6 +504,11 @@ function ThreadView({ subject, onBack }) {
             >
               <button type="button" onClick={() => startReply(msg, senderName)}>↩ Reply</button>
               {isMe && <button type="button" onClick={() => startEdit(msg)}>✏️ Edit</button>}
+              {isInstructor && (
+                <button type="button" onClick={() => msg.is_pinned ? handleUnpin(msg.id) : handlePin(msg.id)}>
+                  {msg.is_pinned ? '📌 Unpin' : '📌 Pin'}
+                </button>
+              )}
               {isMe && <button type="button" className="home__msg-menu-danger" onClick={() => handleUnsend(msg.id)}>🗑 Unsend</button>}
             </div>
           )
@@ -566,7 +612,9 @@ function Home({ session }) {
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
   const [studentName, setStudentName] = useState('')
+  const [sectionCode, setSectionCode] = useState('')
   const [subjects, setSubjects] = useState([])
+  const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -579,6 +627,9 @@ function Home({ session }) {
     let cancelled = false
 
     const loadEnrollments = async () => {
+      // Sync profile from auth metadata first
+      await syncProfileFromAuth()
+
       const result = await getStudentEnrollments()
       if (cancelled) return
 
@@ -596,12 +647,20 @@ function Home({ session }) {
       if (valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.code,
+          code: e.courses.sections?.name || e.courses.code,
           description: e.courses.title || e.courses.code,
           courseId: e.course_id,
-          schedule: e.courses.schedule || null,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
         }))
         setSubjects(loaded)
+
+        // Load recent messages for dashboard
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+
         setView('chats')
       } else {
         setView('prompt')
@@ -610,7 +669,7 @@ function Home({ session }) {
 
     loadEnrollments()
     return () => { cancelled = true }
-  }, [session?.user?.id])  // re-run if the logged-in user changes
+  }, [])  // run on mount to always fetch fresh data when returning to page
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -717,32 +776,140 @@ function Home({ session }) {
     ])
   }
 
+  const joinBySectionCode = async () => {
+    if (!sectionCode.trim()) {
+      setError('Please enter a section code')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const { success, section, error: findError } = await findSectionByCode(sectionCode.trim())
+
+      if (!success) {
+        setError(findError || 'Section not found. Please check the code and try again.')
+        setSaving(false)
+        return
+      }
+
+      if (!section?.courses) {
+        setError('Section has no linked course. Please contact your instructor.')
+        setSaving(false)
+        return
+      }
+
+      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(
+        section.id,
+        section.courses.id
+      )
+
+      if (!enrollSuccess) {
+        setError(enrollError || 'Failed to join section')
+        setSaving(false)
+        return
+      }
+
+      if (alreadyEnrolled) {
+        toast.success('You are already enrolled in this section')
+      } else {
+        toast.success(`Successfully joined ${section.name}`)
+      }
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.courses.sections?.name || e.courses.code,
+          description: e.courses.title || e.courses.code,
+          courseId: e.course_id,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+        }))
+        setSubjects(loaded)
+
+        // Load recent messages
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setSectionCode('')
+      setView('chats')
+    } catch (err) {
+      console.error(err)
+      setError('Failed to join section')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const confirmSubjects = async () => {
     setSaving(true)
     try {
-      const result = await saveStudentSubjects(studentName, subjects)
-      if (result.success) {
-        // Reload from DB so the GC list is DB-driven
-        const fresh = await getStudentEnrollments()
-        const valid = (fresh.enrollments ?? []).filter(e => e.courses?.code)
-        if (fresh.success && valid.length > 0) {
-          const loaded = valid.map((e) => ({
-            id: e.id,
-            code: e.courses.code,
-            description: e.courses.title || e.courses.code,
-            courseId: e.course_id,
-            schedule: e.courses.schedule || null,
-          }))
-          setSubjects(loaded)
-          toast.success(`Joined ${loaded.length} group chat${loaded.length !== 1 ? 's' : ''}!`)
+      // Update profile with name if provided
+      if (studentName.trim()) {
+        const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
+        if (!profileSuccess) {
+          console.error('Failed to update profile name')
         }
-        setView('chats')
-      } else {
-        setError('Failed to save subjects: ' + result.error)
       }
+
+      // Process each subject as a section code
+      const results = []
+      for (const subject of subjects) {
+        if (!subject.code?.trim()) continue
+
+        const { success, section, error: findError } = await findSectionByCode(subject.code.trim())
+        if (!success || !section?.courses) {
+          console.error(`Failed to find section ${subject.code}:`, findError)
+          continue
+        }
+
+        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(
+          section.id,
+          section.courses.id
+        )
+        if (enrollSuccess && !alreadyEnrolled) {
+          results.push(section.name)
+        }
+      }
+
+      if (results.length > 0) {
+        toast.success(`Joined ${results.length} section${results.length !== 1 ? 's' : ''}: ${results.join(', ')}`)
+      } else {
+        toast.info('No new sections joined')
+      }
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.courses.sections?.name || e.courses.code,
+          description: e.courses.title || e.courses.code,
+          courseId: e.course_id,
+          sectionId: e.courses.sections?.id,
+          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+        }))
+        setSubjects(loaded)
+
+        // Load recent messages
+        const courseIds = loaded.map(s => s.courseId)
+        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setView('chats')
     } catch (err) {
       console.error(err)
-      setError('Failed to save subjects to database')
+      setError('Failed to join sections')
     } finally {
       setSaving(false)
     }
@@ -753,6 +920,7 @@ function Home({ session }) {
     setImageFile(null)
     setImagePreview(null)
     setStudentName('')
+    setSectionCode('')
     setError('')
     setProgress(0)
     // Don't clear subjects — keep existing enrollments visible
@@ -766,6 +934,21 @@ function Home({ session }) {
   const backToChats = () => {
     setActiveThread(null)
     setView('chats')
+  }
+
+  const formatRelativeTime = (iso) => {
+    const date = new Date(iso)
+    const now = new Date()
+    const diffMs = now - date
+    const diffMins = Math.floor(diffMs / 60000)
+    const diffHours = Math.floor(diffMs / 3600000)
+    const diffDays = Math.floor(diffMs / 86400000)
+
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins}m ago`
+    if (diffHours < 24) return `${diffHours}h ago`
+    if (diffDays < 7) return `${diffDays}d ago`
+    return date.toLocaleDateString()
   }
 
   return (
@@ -784,16 +967,48 @@ function Home({ session }) {
           </div>
           <h2 className="home__title">You haven't joined any group chats yet</h2>
           <p className="home__subtitle">
-            Upload your Certificate of Registration (COR) and we'll automatically find and join the
-            group chats for your enrolled subjects.
+            Join your class by entering the section code provided by your instructor (e.g., BSIT 3A).
           </p>
+
+          <div className="home__field-group" style={{ width: '100%', maxWidth: '300px' }}>
+            <input
+              type="text"
+              className="home__input"
+              placeholder="Enter section code"
+              value={sectionCode}
+              onChange={(e) => setSectionCode(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
+              disabled={saving}
+            />
+          </div>
+
           <button
             type="button"
             className="home__btn home__btn--primary"
-            onClick={() => setView('upload')}
+            onClick={joinBySectionCode}
+            disabled={saving || !sectionCode.trim()}
+            style={{ width: '100%', maxWidth: '300px' }}
           >
-            Find your GC
+            {saving ? 'Joining...' : 'Join Section'}
           </button>
+
+          {error && (
+            <p className="home__error" style={{ marginTop: '12px' }}>{error}</p>
+          )}
+
+          <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid var(--border)', width: '100%' }}>
+            <p className="home__subtitle" style={{ marginBottom: '12px' }}>
+              Or upload your Certificate of Registration (COR) to automatically find your sections.
+            </p>
+            <button
+              type="button"
+              className="home__btn home__btn--secondary"
+              onClick={() => setView('upload')}
+              style={{ width: '100%', maxWidth: '300px' }}
+            >
+              Upload COR
+            </button>
+          </div>
         </div>
       )}
 
@@ -817,7 +1032,7 @@ function Home({ session }) {
 
           <h2 className="home__title">Upload Your Certificate of Registration</h2>
           <p className="home__subtitle">
-            We'll scan your COR to automatically find and join the group chats for your enrolled subjects.
+            We'll scan your COR to automatically find and join the group chats for your enrolled sections.
           </p>
 
           {!imagePreview ? (
@@ -887,7 +1102,7 @@ function Home({ session }) {
       {saving && (
         <div className="home__card home__card--center">
           <div className="home__spinner" />
-          <h2 className="home__title">Joining Group Chats</h2>
+          <h2 className="home__title">Joining Sections</h2>
           <p className="home__subtitle">This may take a few seconds…</p>
         </div>
       )}
@@ -926,11 +1141,11 @@ function Home({ session }) {
               </div>
 
               <span className="home__panel-title" style={{ marginTop: '16px' }}>
-                Enrolled Subjects
+                Detected Section Codes
               </span>
               <div className="home__table">
                 <div className="home__table-header">
-                  <span>Code</span>
+                  <span>Section Code</span>
                   <span>Description</span>
                   <span></span>
                 </div>
@@ -975,7 +1190,7 @@ function Home({ session }) {
                   onClick={confirmSubjects}
                   disabled={subjects.length === 0 || saving}
                 >
-                  {saving ? 'Joining Group Chats...' : 'Confirm & Join Group Chats'}
+                  {saving ? 'Joining Sections...' : 'Confirm & Join Sections'}
                 </button>
               </div>
             </div>
@@ -986,30 +1201,47 @@ function Home({ session }) {
       {view === 'chats' && (
         <div className="home__chats">
           <div className="home__chats-header">
-            <h2 className="home__title">Your Group Chats</h2>
+            <h2 className="home__title">Your Sections</h2>
             <button type="button" className="home__reupload" onClick={startOver}>
               Re-upload COR
             </button>
           </div>
 
-          <div className="home__gc-list">
-            {subjects.map((subject) => (
-              <button
-                key={subject.id}
-                type="button"
-                className="home__gc-item"
-                onClick={() => openThread(subject)}
-              >
-                <div className="home__gc-icon">
-                  <ChatIcon width={18} height={18} />
-                </div>
-                <div className="home__gc-info">
-                  <span className="home__gc-code">{subject.code || 'Untitled'}</span>
-                  <span className="home__gc-desc">{subject.description}</span>
-                </div>
-              </button>
-            ))}
-          </div>
+          {subjects.length === 0 ? (
+            <p className="home__empty">No sections found.</p>
+          ) : (
+            <div className="home__gc-list">
+              {subjects.map((subject) => {
+                const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
+                return (
+                  <button
+                    key={subject.id}
+                    type="button"
+                    className="home__gc-item home__gc-item--full"
+                    onClick={() => openThread(subject)}
+                  >
+                    <div className="home__gc-icon">
+                      <ChatIcon width={18} height={18} />
+                    </div>
+                    <div className="home__gc-info">
+                      <span className="home__gc-code">{subject.code || 'Untitled'}</span>
+                      <span className="home__gc-desc">{subject.description}</span>
+                      {recentMsg && (
+                        <span className="home__gc-preview">
+                          {recentMsg.content.substring(0, 50)}{recentMsg.content.length > 50 ? '...' : ''}
+                        </span>
+                      )}
+                    </div>
+                    {recentMsg && (
+                      <span className="home__gc-time">
+                        {formatRelativeTime(recentMsg.created_at)}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 

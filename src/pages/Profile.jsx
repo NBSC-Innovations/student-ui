@@ -42,6 +42,12 @@ function Profile({ session }) {
   const [enrollments, setEnrollments] = useState([])
   const [loadingEnroll, setLoadingEnroll] = useState(true)
 
+  const departments = {
+    IBM: 'Institute of Business Management (IBM)',
+    ICS: 'Institute for Computer Studies (ICS)',
+    ITE: 'Institute of Teacher Education (ITE)'
+  }
+
   const user = session?.user
   const email = user?.email || ''
 
@@ -69,8 +75,8 @@ function Profile({ session }) {
       .then(({ data }) => {
         if (data) {
           setFullName(data.full_name || '')
-          // Use DB student_id if set, otherwise auto-fill from email
-          setStudentId(data.student_id || emailStudentId)
+          // Always use email extraction for student ID
+          setStudentId(emailStudentId)
           setDepartment(data.department || '')
 
           // Auto-sync avatar from metadata if missing or different
@@ -105,7 +111,7 @@ function Profile({ session }) {
       .from('profiles')
       .update({
         full_name: fullName,
-        student_id: studentId,
+        student_id: emailStudentId,
         department,
         avatar_url: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null,
       })
@@ -185,11 +191,16 @@ function Profile({ session }) {
           </div>
 
           <div className="profile__field">
-            <label className="profile__label">Department / Course</label>
+            <label className="profile__label">Department</label>
             {editing
-              ? <input className="profile__input" value={department}
-                  onChange={e => setDepartment(e.target.value)} placeholder="e.g. BSIT" />
-              : <span className="profile__value">{department || <span className="profile__empty">Not set</span>}</span>
+              ? <select className="profile__input" value={department}
+                  onChange={e => setDepartment(e.target.value)}>
+                  <option value="">Select department</option>
+                  {Object.entries(departments).map(([code, name]) => (
+                    <option key={code} value={code}>{name}</option>
+                  ))}
+                </select>
+              : <span className="profile__value">{department ? departments[department] : <span className="profile__empty">Not set</span>}</span>
             }
           </div>
 

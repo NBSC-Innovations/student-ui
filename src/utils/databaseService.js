@@ -237,61 +237,30 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
   }
 }
 
-export async function getStudentEnrollments() {
-  try {
-    const { data: { user }, error: userError } = await supabase.auth.getUser()
-    log('[DB] getUser ->', user?.id ?? 'NO USER', userError ?? '')
-    if (userError) throw userError
-    if (!user) throw new Error('User not authenticated')
-
-    const { data: enrollments, error } = await supabase
-      .from('enrollments')
-      .select(`
-        id,
-        course_id,
-        status,
-        courses (
-          id,
-          code,
-          title,
-          schedule
-        )
-      `)
-      .eq('student_id', user.id)
-      .eq('status', 'active')
-      .order('enrolled_at', { ascending: true })
-
-    log('[DB] enrollments query error:', error)
-    log('[DB] enrollments raw data:', JSON.stringify(enrollments, null, 2))
-
-    if (error) throw error
-
-    return { success: true, enrollments: enrollments ?? [] }
-  } catch (error) {
-    logError('[DB] getStudentEnrollments threw:', error.message)
-    return { success: false, error: error.message, enrollments: [] }
-  }
-}
-
 export async function getMessages(courseId) {
   try {
+    // Use RPC function to fetch messages from gc_messages
     const { data, error } = await supabase
-      .from('gc_messages')
-      .select(`
-        id,
-        content,
-        created_at,
-        edited_at,
-        is_deleted,
-        sender_id,
-        reply_to,
-        profiles ( full_name, email )
-      `)
-      .eq('course_id', courseId)
-      .order('created_at', { ascending: true })
+      .rpc('fetch_course_messages', { p_course_id: courseId })
 
     if (error) throw error
-    return { success: true, messages: data }
+
+    // Fetch sender profiles for each message
+    const messagesWithProfiles = await Promise.all(
+      (data || []).map(async (msg) => {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name, email, role')
+          .eq('id', msg.sender_id)
+          .single()
+        return {
+          ...msg,
+          profiles: profile
+        }
+      })
+    )
+
+    return { success: true, messages: messagesWithProfiles }
   } catch (error) {
     logError('Error fetching messages:', error)
     return { success: false, error: error.message }
@@ -304,11 +273,13 @@ export async function sendMessage(courseId, content, replyTo = null) {
     if (userError) throw userError
     if (!user) throw new Error('Not authenticated')
 
+    // Use RPC function to insert message into gc_messages
     const { data, error } = await supabase
-      .from('gc_messages')
-      .insert({ course_id: courseId, sender_id: user.id, content, reply_to: replyTo })
-      .select()
-      .single()
+      .rpc('insert_message', {
+        p_course_id: courseId,
+        p_sender_id: user.id,
+        p_content: content
+      })
 
     if (error) throw error
     return { success: true, message: data }
@@ -322,7 +293,7 @@ export async function editMessage(messageId, newContent) {
   try {
     const { error } = await supabase
       .from('gc_messages')
-      .update({ content: newContent, edited_at: new Date().toISOString() })
+      .update({ content: newContent, edited_at: new Date() })
       .eq('id', messageId)
     if (error) throw error
     return { success: true }
@@ -336,7 +307,7 @@ export async function unsendMessage(messageId) {
   try {
     const { error } = await supabase
       .from('gc_messages')
-      .update({ is_deleted: true, content: '' })
+      .update({ is_deleted: true })
       .eq('id', messageId)
     if (error) throw error
     return { success: true }
@@ -346,12 +317,38 @@ export async function unsendMessage(messageId) {
   }
 }
 
-export async function markMessageSeen(messageId, userId) {
+export async function pinMessage(messageId) {
   try {
     const { error } = await supabase
-      .from('gc_message_seen')
-      .upsert({ message_id: messageId, user_id: userId }, { onConflict: 'message_id,user_id', ignoreDuplicates: true })
+      .from('gc_messages')
+      .update({ is_pinned: true })
+      .eq('id', messageId)
     if (error) throw error
+    return { success: true }
+  } catch (error) {
+    logError('Error pinning message:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+export async function unpinMessage(messageId) {
+  try {
+    const { error } = await supabase
+      .from('gc_messages')
+      .update({ is_pinned: false })
+      .eq('id', messageId)
+    if (error) throw error
+    return { success: true }
+  } catch (error) {
+    logError('Error unpinning message:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+export async function markMessageSeen(messageId, userId) {
+  try {
+    // Temporarily disabled - gc_message_seen table was dropped
+    // TODO: Re-implement message seen tracking if needed
     return { success: true }
   } catch (error) {
     logError('Error marking message as seen:', error)
@@ -360,63 +357,48 @@ export async function markMessageSeen(messageId, userId) {
 }
 
 export async function getSeenReceipts(courseId) {
-  try {
-    const { data, error } = await supabase
-      .from('gc_message_seen')
-      .select(`
-        message_id,
-        user_id,
-        seen_at,
-        profiles ( full_name, email ),
-        gc_messages!inner ( course_id )
-      `)
-      .eq('gc_messages.course_id', courseId)
-    if (error) throw error
-    return { success: true, receipts: data }
-  } catch (error) {
-    logError('getSeenReceipts error:', error)
-    return { success: false, receipts: [] }
-  }
+  // Not implemented in new schema - seen receipts not in instructor schema
+  return { success: true, receipts: [] }
 }
 
 export function subscribeToMessages(courseId, onInsert, onUpdate) {
+  // Subscribe to gc_messages table directly
   return supabase
     .channel(`gc_messages:${courseId}`)
     .on('postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
-      (payload) => onInsert(payload.new)
+      { event: 'INSERT', schema: 'public', table: 'gc_messages' },
+      (payload) => {
+        if (payload.new.course_id === courseId) {
+          onInsert(payload.new)
+        }
+      }
     )
     .on('postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: 'gc_messages', filter: `course_id=eq.${courseId}` },
-      (payload) => onUpdate?.(payload.new)
+      { event: 'UPDATE', schema: 'public', table: 'gc_messages' },
+      (payload) => {
+        if (payload.new.course_id === courseId) {
+          onUpdate?.(payload.new)
+        }
+      }
     )
     .subscribe()
 }
 
 export function subscribeToSeen(courseId, onSeen) {
-  return supabase
-    .channel(`gc_seen:${courseId}`)
-    .on('postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'gc_message_seen',
-        filter: `message_id=in.(select id from gc_messages where course_id=eq.${courseId})`
-      },
-      (payload) => onSeen?.(payload.new)
-    )
-    .subscribe()
+  // Not implemented in new schema
+  return { unsubscribe: () => {} }
 }
 
-// Fetch all students enrolled in a course (excluding the current user)
-// Returns: { success, members: [{ id, full_name, email, avatar_url }], total }
+// Fetch all members in a course (students + instructor)
+// Returns: { success, members: [{ id, full_name, email, avatar_url, role }], total }
 export async function getCourseMembers(courseId) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
     if (!user) throw new Error('Not authenticated')
 
-    const { data, error } = await supabase
+    // Fetch enrolled students
+    const { data: enrollments, error: enrollError } = await supabase
       .from('enrollments')
       .select(`
         student_id,
@@ -424,17 +406,41 @@ export async function getCourseMembers(courseId) {
           id,
           full_name,
           email,
-          avatar_url
+          avatar_url,
+          role
         )
       `)
       .eq('course_id', courseId)
       .eq('status', 'active')
 
-    if (error) throw error
+    if (enrollError) throw enrollError
 
-    const members = (data ?? [])
-      .map(e => e.profiles)
+    const members = (enrollments ?? [])
+      .map(e => ({ ...e.profiles, role: e.profiles.role || 'student' }))
       .filter(Boolean)
+
+    // Fetch course instructor
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('instructor_id')
+      .eq('id', courseId)
+      .single()
+
+    if (!courseError && course?.instructor_id) {
+      // Fetch instructor profile separately
+      const { data: instructor, error: instructorError } = await supabase
+        .from('profiles')
+        .select('id, full_name, email, avatar_url, role')
+        .eq('id', course.instructor_id)
+        .single()
+
+      if (!instructorError && instructor) {
+        // Add instructor if not already in the list
+        if (!members.find(m => m.id === instructor.id)) {
+          members.unshift({ ...instructor, role: instructor.role || 'instructor' })
+        }
+      }
+    }
 
     return { success: true, members, total: members.length }
   } catch (error) {
@@ -452,4 +458,268 @@ export function subscribeToMembers(courseId, onChange) {
       () => onChange?.()
     )
     .subscribe()
+}
+
+// Get recent messages for dashboard preview (last message per course)
+export async function getRecentMessages(courseIds) {
+  try {
+    if (!courseIds || courseIds.length === 0) {
+      return { success: true, messages: [] }
+    }
+
+    const { data, error } = await supabase
+      .from('gc_messages')
+      .select(`
+        id,
+        content,
+        created_at,
+        course_id,
+        sender_id,
+        is_pinned
+      `)
+      .in('course_id', courseIds)
+      .order('created_at', { ascending: false })
+      .limit(100)
+
+    if (error) throw error
+
+    // Get only the most recent message per course
+    const latestByCourse = {}
+    data?.forEach(msg => {
+      const courseId = msg.course_id
+      if (courseId && (!latestByCourse[courseId] || new Date(msg.created_at) > new Date(latestByCourse[courseId].created_at))) {
+        latestByCourse[courseId] = { ...msg }
+      }
+    })
+
+    // Fetch course info and sender profiles for each message
+    const messagesWithDetails = await Promise.all(
+      Object.values(latestByCourse).map(async (msg) => {
+        const [{ data: course }, { data: profile }] = await Promise.all([
+          supabase.from('courses').select('code, title').eq('id', msg.course_id).single(),
+          supabase.from('profiles').select('full_name, role').eq('id', msg.sender_id).single()
+        ])
+        return {
+          ...msg,
+          courses: course,
+          profiles: profile
+        }
+      })
+    )
+
+    return { success: true, messages: messagesWithDetails }
+  } catch (error) {
+    logError('Error fetching recent messages:', error)
+    return { success: false, messages: [] }
+  }
+}
+
+// Update user profile with name and avatar
+export async function updateProfile(fullName, avatarUrl) {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    const updateData = {}
+    if (fullName) updateData.full_name = fullName
+    if (avatarUrl) updateData.avatar_url = avatarUrl
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('id', user.id)
+
+    if (error) throw error
+
+    return { success: true }
+  } catch (error) {
+    logError('Error updating profile:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Find section by section code and return with linked course
+export async function findSectionByCode(sectionCode) {
+  try {
+    const { data, error } = await supabase
+      .from('sections')
+      .select(`
+        id,
+        name,
+        schedule,
+        room,
+        max_capacity,
+        courses (
+          id,
+          code,
+          title
+        )
+      `)
+      .eq('name', sectionCode.trim())
+      .maybeSingle()
+
+    if (error) throw error
+
+    if (!data) {
+      return { success: false, error: 'Section not found' }
+    }
+
+    return { success: true, section: data }
+  } catch (error) {
+    logError('Error finding section:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Enroll student in a section (via its linked course)
+export async function enrollInSection(sectionId, courseId) {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    // Check if already enrolled
+    const { data: existing, error: checkError } = await supabase
+      .from('enrollments')
+      .select('id')
+      .eq('student_id', user.id)
+      .eq('course_id', courseId)
+      .maybeSingle()
+
+    if (checkError && checkError.code !== 'PGRST116') throw checkError
+
+    if (existing) {
+      return { success: true, alreadyEnrolled: true }
+    }
+
+    // Create enrollment
+    const { error: enrollError } = await supabase
+      .from('enrollments')
+      .insert({
+        student_id: user.id,
+        course_id: courseId,
+        status: 'active'
+      })
+
+    if (enrollError) throw enrollError
+
+    return { success: true, alreadyEnrolled: false }
+  } catch (error) {
+    logError('Error enrolling in section:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Get student enrollments with section information
+export async function getStudentEnrollments() {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    const { data, error } = await supabase
+      .from('enrollments')
+      .select(`
+        id,
+        course_id,
+        status,
+        courses (
+          id,
+          code,
+          title,
+          schedule,
+          sections (
+            id,
+            name,
+            room
+          )
+        )
+      `)
+      .eq('student_id', user.id)
+      .eq('status', 'active')
+
+    if (error) throw error
+
+    log('[DB] enrollments raw data:', data)
+
+    return { success: true, enrollments: data ?? [] }
+  } catch (error) {
+    logError('[DB] enrollments query error:', error)
+    return { success: false, error: error.message, enrollments: [] }
+  }
+}
+
+// Sync profile from auth metadata (call this on app load)
+export async function syncProfileFromAuth() {
+  try {
+    const { data: { user }, error: userError } = await supabase.auth.getUser()
+    if (userError) throw userError
+    if (!user) throw new Error('Not authenticated')
+
+    log('[Profile] Auth user metadata:', user.user_metadata)
+    log('[Profile] Auth email:', user.email)
+
+    // Get current profile
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('full_name, avatar_url, student_id')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    if (profileError) throw profileError
+
+    log('[Profile] Current profile:', profile)
+
+    // Always try to get a better name from auth metadata
+    const authName = user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.given_name
+    const authAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture
+
+    // If auth has a name, use it (even if profile exists)
+    // If auth has no name, use email prefix but clean it up
+    const newName = authName || (user.email?.split('@')[0]?.replace(/^student/i, '').trim() || user.email?.split('@')[0])
+    const newAvatar = authAvatar || null
+
+    const needsUpdate = !profile ||
+                       !profile.full_name ||
+                       profile.full_name.startsWith('Student') ||
+                       (authName && profile.full_name !== authName) ||
+                       (authAvatar && profile.avatar_url !== authAvatar)
+
+    if (needsUpdate) {
+      const updateData = {
+        full_name: newName,
+        avatar_url: newAvatar,
+      }
+
+      log('[Profile] Update data:', updateData)
+
+      if (!profile) {
+        // Create profile if it doesn't exist
+        const { error: createError } = await supabase
+          .from('profiles')
+          .insert({
+            id: user.id,
+            email: user.email,
+            ...updateData,
+            role: 'student',
+          })
+        if (createError) throw createError
+      } else {
+        // Update existing profile
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update(updateData)
+          .eq('id', user.id)
+        if (updateError) throw updateError
+      }
+
+      log('[Profile] Synced from auth metadata')
+    }
+
+    return { success: true, profile: { ...profile, full_name: newName, avatar_url: newAvatar } }
+  } catch (error) {
+    logError('Error syncing profile:', error)
+    return { success: false, error: error.message }
+  }
 }
