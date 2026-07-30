@@ -612,6 +612,7 @@ function Home({ session }) {
   const [imagePreview, setImagePreview] = useState(null)
   const [progress, setProgress] = useState(0)
   const [studentName, setStudentName] = useState('')
+  const [academicTerm, setAcademicTerm] = useState('') // Combined AY + Semester
   const [sectionCode, setSectionCode] = useState('')
   const [subjects, setSubjects] = useState([])
   const [recentMessages, setRecentMessages] = useState([])
@@ -621,13 +622,11 @@ function Home({ session }) {
   const fileInputRef = useRef(null)
   const toast = useToast()
 
-  // On mount: session is guaranteed to exist (App.jsx only renders Home when
-  // session is confirmed), so go straight to fetching enrollments.
+  // On mount: session is guaranteed to exist
   useEffect(() => {
     let cancelled = false
 
     const loadEnrollments = async () => {
-      // Sync profile from auth metadata first
       await syncProfileFromAuth()
 
       const result = await getStudentEnrollments()
@@ -641,7 +640,6 @@ function Home({ session }) {
         return
       }
 
-      // Filter to enrollments that have a valid course attached
       const valid = (result.enrollments ?? []).filter(e => e.courses?.code)
 
       if (valid.length > 0) {
@@ -655,7 +653,6 @@ function Home({ session }) {
         }))
         setSubjects(loaded)
 
-        // Load recent messages for dashboard
         const courseIds = loaded.map(s => s.courseId)
         getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
@@ -669,7 +666,7 @@ function Home({ session }) {
 
     loadEnrollments()
     return () => { cancelled = true }
-  }, [])  // run on mount to always fetch fresh data when returning to page
+  }, [])
 
   const handleFileSelect = (file) => {
     if (!file) return
@@ -725,7 +722,6 @@ function Home({ session }) {
       clearInterval(timer)
       setProgress(100)
 
-      // If nothing was extracted at all, treat as unextractable
       const hasName = !!data.name?.trim()
       const hasSubjects = data.subjects?.length > 0
 
@@ -736,6 +732,7 @@ function Home({ session }) {
       }
 
       setStudentName(data.name || '')
+      setAcademicTerm(data.academic_term || '') // Populates full combined term string
       setSubjects(data.subjects || [])
 
       if (data.image_preview) {
@@ -817,7 +814,6 @@ function Home({ session }) {
         toast.success(`Successfully joined ${section.name}`)
       }
 
-      // Reload enrollments
       const fresh = await getStudentEnrollments()
       const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
       if (fresh.success && valid.length > 0) {
@@ -831,7 +827,6 @@ function Home({ session }) {
         }))
         setSubjects(loaded)
 
-        // Load recent messages
         const courseIds = loaded.map(s => s.courseId)
         getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
@@ -851,7 +846,6 @@ function Home({ session }) {
   const confirmSubjects = async () => {
     setSaving(true)
     try {
-      // Update profile with name if provided
       if (studentName.trim()) {
         const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
         if (!profileSuccess) {
@@ -859,7 +853,6 @@ function Home({ session }) {
         }
       }
 
-      // Process each subject as a section code
       const results = []
       for (const subject of subjects) {
         if (!subject.code?.trim()) continue
@@ -885,7 +878,6 @@ function Home({ session }) {
         toast.info('No new sections joined')
       }
 
-      // Reload enrollments
       const fresh = await getStudentEnrollments()
       const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
       if (fresh.success && valid.length > 0) {
@@ -899,7 +891,6 @@ function Home({ session }) {
         }))
         setSubjects(loaded)
 
-        // Load recent messages
         const courseIds = loaded.map(s => s.courseId)
         getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
@@ -920,10 +911,10 @@ function Home({ session }) {
     setImageFile(null)
     setImagePreview(null)
     setStudentName('')
+    setAcademicTerm('')
     setSectionCode('')
     setError('')
     setProgress(0)
-    // Don't clear subjects — keep existing enrollments visible
   }
 
   const openThread = (subject) => {
@@ -1129,6 +1120,7 @@ function Home({ session }) {
             </div>
 
             <div className="home__form-panel">
+              {/* Student Name */}
               <div className="home__field-group">
                 <label className="home__label">Student Name</label>
                 <input
@@ -1137,6 +1129,18 @@ function Home({ session }) {
                   value={studentName}
                   onChange={(e) => setStudentName(e.target.value)}
                   placeholder="e.g. SURNAME, FIRSTNAME MIDDLENAME."
+                />
+              </div>
+
+              {/* Single Combined Academic Term */}
+              <div className="home__field-group">
+                <label className="home__label">Academic Term / Semester</label>
+                <input
+                  type="text"
+                  className="home__input"
+                  value={academicTerm}
+                  onChange={(e) => setAcademicTerm(e.target.value)}
+                  placeholder="e.g. AY 2025-2026 Summer Semester"
                 />
               </div>
 
