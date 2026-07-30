@@ -601,6 +601,29 @@ CREATE POLICY "Instructors can send messages to their courses"
     );
 
 -- ============================================
+-- AUTH HELPER FUNCTIONS
+-- ============================================
+
+-- Function to check if user exists in profiles (bypasses RLS for auth checking)
+CREATE OR REPLACE FUNCTION public.check_user_exists(p_email TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE email = p_email
+  );
+END;
+$$;
+
+-- Grant execute to authenticated and anon
+GRANT EXECUTE ON FUNCTION public.check_user_exists TO authenticated;
+GRANT EXECUTE ON FUNCTION public.check_user_exists TO anon;
+
+-- ============================================
 -- SUMMARY OF SYNC FLOW
 -- ============================================
 -- 1. Instructor creates section with code (e.g., "BSIT 3A") and description
