@@ -191,6 +191,84 @@ def clean_subject_description(text):
 
   return text
 
+def extract_academic_term(image, lines):
+  found_ay = ''
+  found_sem = ''
+
+  # 1. Broadly look for year ranges like 2024-2025, 2025-2026, 2025/2026
+  year_range_pattern = re.compile(r'\b(20\d{2}\s*[-–—/~\.]\s*20\d{2})\b')
+
+  # 2. Look for semester indicators
+  sem_keywords = {
+      'first': 'First Semester',
+      '1st': 'First Semester',
+      'second': 'Second Semester',
+      '2nd': 'Second Semester',
+      'summer': 'Summer Semester',
+  }
+
+  # First, inspect top 20 structured lines
+  header_text_combined = ''
+  for line in lines[:20]:
+    line_str = ' '.join([w['text'] for w in line])
+    header_text_combined += ' ' + line_str
+
+  # Print to terminal for debugging
+  print('\n--- [DEBUG] TOP HEADER OCR TEXT ---')
+  print(header_text_combined)
+  print('-----------------------------------\n')
+
+  # Search for Year Pair
+  year_match = year_range_pattern.search(header_text_combined)
+  if year_match:
+    clean_years = re.sub(r'\s*[-–—/~\.]\s*', '-', year_match.group(1))
+    found_ay = f'AY {clean_years}'
+
+  # Search for Semester Keyword
+  for key, label in sem_keywords.items():
+    if re.search(r'\b' + key + r'\b', header_text_combined, re.IGNORECASE):
+      found_sem = label
+      break
+
+  # If structured pass missed it, do raw crop OCR with thresholding
+  if not (found_ay and found_sem):
+    h, w = image.shape[:2]
+    top_crop = image[0 : int(h * 0.30), 0:w]  # Take top 30%
+
+    # Preprocess crop: Grayscale + Otsu thresholding for banner contrast
+    gray_crop = cv2.cvtColor(top_crop, cv2.COLOR_BGR2GRAY)
+    _, thresh_crop = cv2.threshold(
+        gray_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+
+    crop_raw_text = pytesseract.image_to_string(
+        thresh_crop, config='--oem 1 --psm 11'
+    )
+    print('--- [DEBUG] CROP OCR TEXT ---')
+    print(crop_raw_text)
+    print('-----------------------------\n')
+
+    if not found_ay:
+      year_match = year_range_pattern.search(crop_raw_text)
+      if year_match:
+        clean_years = re.sub(r'\s*[-–—/~\.]\s*', '-', year_match.group(1))
+        found_ay = f'AY {clean_years}'
+
+    if not found_sem:
+      for key, label in sem_keywords.items():
+        if re.search(r'\b' + key + r'\b', crop_raw_text, re.IGNORECASE):
+          found_sem = label
+          break
+
+  # Build result string
+  if found_ay and found_sem:
+    return f"{found_ay} - {found_sem}"
+  if found_ay:
+    return found_ay
+  if found_sem:
+    return found_sem
+
+  return ''
 
 def extract_table_subjects(lines):
   subjects = []
@@ -422,6 +500,9 @@ async def scan_cor_endpoint(file: UploadFile = File(...)):
   lines = group_text_into_lines(data, y_tolerance=14)
 
   name, name_conf = extract_student_name(lines)
+  academic_term = extract_academic_term(
+      image, lines
+  )  # <--- PASS image AS FIRST PARAMETER
   subjects = extract_table_subjects(lines)
 
   _, buffer = cv2.imencode('.jpg', image)
@@ -431,6 +512,7 @@ async def scan_cor_endpoint(file: UploadFile = File(...)):
   return {
       'name': name,
       'name_confidence': name_conf,
+      'academic_term': academic_term,
       'subjects': subjects,
       'image_preview': base64_src,
   }
