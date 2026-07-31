@@ -27,8 +27,9 @@ Students can join your section in two ways:
 
 #### Option B: Manual Section Code
 - Student manually enters the section code (e.g., "ICS73")
+- Input automatically converts to uppercase
 - System finds the section by code
-- Student is enrolled in the linked course
+- Student is enrolled in the linked course (or section if no course is linked)
 - Trigger adds them to the group chat
 
 ### 3. Automatic Sync Flow
@@ -132,10 +133,11 @@ ORDER BY gc.name, p.full_name;
 
 ### Manual Code Flow
 1. Student enters section code (e.g., "BSIT-3A")
-2. System finds section by code
-3. Student confirms enrollment
-4. System enrolls student in linked course
-5. Trigger adds student to group chat
+2. Input automatically converts to uppercase
+3. System finds section by code
+4. Student confirms enrollment
+5. System enrolls student in linked course (or section if no course is linked)
+6. Trigger adds student to group chat
 
 ## Troubleshooting
 
@@ -434,6 +436,34 @@ ON CONFLICT (group_chat_id, user_id) DO NOTHING;
 - **Regular backups** - Export database schema and data regularly
 - **Audit logs** - Monitor enrollment and message activity for suspicious patterns
 
+## Recent UI/UX Improvements
+
+### Mobile Responsiveness Enhancements
+
+The student interface has been enhanced for better mobile experience:
+
+- **Mobile Modals for Schedule & Netiquette**: On small screens (≤768px), clicking "Schedule & Members" or "Netiquette" now opens a modal overlay instead of a side panel, matching the behavior of the "Leave Group Chat" modal
+- **Fixed Menu Visibility**: Thread menu dropdown z-index increased to ensure it appears above all other elements on mobile screens
+- **Responsive Layout**: Group chat interface adapts seamlessly between desktop (side panels) and mobile (modal overlays)
+
+### Section Code Input Improvements
+
+- **Auto-Uppercase Conversion**: All section code input fields now automatically convert to uppercase as the user types, ensuring consistent formatting
+- **Flexible Section Joining**: Students can now join sections even if they have no linked course, allowing group chats to function independently of course assignments
+
+### Profile Page Fixes
+
+- **Enrolled Subjects Display**: Fixed data access paths to correctly display enrolled subjects using the proper nested structure (`sections.courses` instead of direct `courses` access)
+
+### Student Experience Updates
+
+The student enrollment flow now includes:
+
+1. **Uppercase Input**: Section code input automatically converts to uppercase
+2. **Flexible Joining**: Can join sections with or without linked courses
+3. **Mobile-Friendly**: Schedule, netiquette, and leave options display as modals on mobile
+4. **Proper Data Display**: Enrolled subjects show correct course information in profile
+
 ## Summary
 
 The instructor workflow is designed to be simple:
@@ -447,3 +477,12 @@ The instructor workflow is designed to be simple:
 No manual management of group chat memberships is required - it's all handled automatically by database triggers.
 
 For system administrators, ensure all SQL setup scripts are run in order and monitor the database health using the provided diagnostic queries.
+
+## Mobile & Responsive Features
+
+The application includes comprehensive mobile support:
+
+- **Responsive Design**: Adapts layout based on screen size
+- **Touch-Friendly**: Large tap targets and intuitive gestures
+- **Modal Overlays**: Critical information displayed in modals on small screens
+- **Auto-Formatting**: Inputs automatically format for consistency (e.g., uppercase codes)
