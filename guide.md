@@ -452,6 +452,7 @@ The system enforces strict email validation for student accounts:
 - **Minimum Length**: Passwords must be at least 8 characters
 - **Password Visibility**: Users can toggle password visibility with eye icon
 - **Password Reset**: Forgot password flow sends reset link to registered email
+- **Password Tracking**: Password status is tracked via `has_password` column in profiles table for reliable detection
 
 ### Authentication Methods
 
@@ -526,6 +527,7 @@ The student enrollment flow now includes:
 2. **Flexible Joining**: Can join sections with or without linked courses
 3. **Mobile-Friendly**: Schedule, netiquette, and leave options display as modals on mobile
 4. **Proper Data Display**: Enrolled subjects show correct course information in profile
+5. **COR Re-upload Handling**: When students re-upload their COR, the system automatically joins new sections based on the updated schedule and removes enrollments from previous sections not in the new COR
 
 ## Summary
 
