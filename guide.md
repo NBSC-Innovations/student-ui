@@ -436,6 +436,69 @@ ON CONFLICT (group_chat_id, user_id) DO NOTHING;
 - **Regular backups** - Export database schema and data regularly
 - **Audit logs** - Monitor enrollment and message activity for suspicious patterns
 
+## Authentication & Validation
+
+### Email Validation
+
+The system enforces strict email validation for student accounts:
+
+- **Domain Restriction**: Only `@nbsc.edu.ph` email addresses are allowed
+- **Numeric Requirement**: Email local part must be numeric (e.g., `2023001234@nbsc.edu.ph`)
+- **Real-time Validation**: Email validation occurs as user types and clears error when valid domain is entered
+- **Error Messages**: Clear error messages guide users to correct format
+
+### Password Requirements
+
+- **Minimum Length**: Passwords must be at least 8 characters
+- **Password Visibility**: Users can toggle password visibility with eye icon
+- **Password Reset**: Forgot password flow sends reset link to registered email
+
+### Authentication Methods
+
+The system supports multiple authentication methods:
+
+1. **Google OAuth Sign-in**
+   - One-click authentication with Google account
+   - Automatic profile creation from Google metadata
+   - Avatar sync from Google profile picture
+
+2. **Email/Password Sign-in**
+   - Traditional email and password authentication
+   - Email confirmation required before account activation
+   - Session management with automatic redirects
+
+3. **Account Linking**
+   - Users can link Google account to existing password account
+   - Users can add password to existing Google account
+   - Flexible sign-in options after linking
+
+### Sign-up Flow
+
+1. User enters email (validated for @nbsc.edu.ph domain and numeric format)
+2. User creates password (minimum 8 characters)
+3. System sends confirmation email
+4. User clicks confirmation link to activate account
+5. Profile automatically created by database trigger
+6. User redirected to student portal
+
+### Error Handling
+
+The login system provides comprehensive error handling:
+
+- **Invalid Credentials**: Clear message when email/password don't match
+- **Google Account Detection**: Informs users if they need to use Google sign-in
+- **Email Confirmation**: Reminds users to check inbox for confirmation link
+- **Account Exists**: Guides users to sign in if account already exists
+- **Network Errors**: Graceful handling of connection issues
+
+### Security Features
+
+- **Email Verification**: Required before account activation
+- **Session Management**: Automatic session handling with Supabase auth
+- **Password Reset**: Secure password reset via email link
+- **Account Recovery**: Forgot password flow for account recovery
+- **Profile Auto-creation**: Database trigger creates profile on signup
+
 ## Recent UI/UX Improvements
 
 ### Mobile Responsiveness Enhancements
