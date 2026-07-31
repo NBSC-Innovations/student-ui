@@ -277,8 +277,111 @@
 }
 
 .profile__empty {
+  color: var(--text-tertiary, #94a3b8);
   font-size: 14px;
-  color: #94a3b8;
-  font-style: italic;
-  font-weight: 400;
+}
+
+/* ── Sign-in methods ── */
+.profile__value--active {
+  color: #10b981;
+  font-weight: 500;
+}
+
+.profile__value--inactive {
+  color: var(--text-tertiary, #94a3b8);
+}
+
+.profile__link-btn {
+  margin-top: 12px;
+  padding: 10px 16px;
+  background: var(--nbsc-blue-50, #dbeafe);
+  color: var(--nbsc-blue-600, #2563eb);
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profile__link-btn:hover {
+  background: var(--nbsc-blue-100, #bfdbfe);
+}
+
+/* ── Modal ── */
+.profile__modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.profile__modal {
+  background: #fff;
+  border-radius: 16px;
+  padding: 28px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+.profile__modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text-primary, #0f172a);
+}
+
+.profile__modal-desc {
+  font-size: 14px;
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.profile__modal-field {
+  margin-bottom: 16px;
+}
+
+.profile__modal-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.profile__modal-btn {
+  flex: 1;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.profile__modal-btn--cancel {
+  background: #f1f5f9;
+  color: var(--text-secondary, #64748b);
+  border: none;
+}
+
+.profile__modal-btn--cancel:hover {
+  background: #e2e8f0;
+}
+
+.profile__modal-btn--confirm {
+  background: var(--nbsc-blue-500, #3b5fc0);
+  color: #fff;
+  border: none;
+}
+
+.profile__modal-btn--confirm:hover {
+  background: var(--nbsc-blue-600, #2d4aa0);
 }

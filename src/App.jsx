@@ -42,8 +42,8 @@ function App() {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      console.log('[Auth]', _event, session?.user?.email ?? 'no session')
-
+      console.log('[Auth] State change:', _event, session?.user?.email ?? 'no session')
+      
       if (_event === 'SIGNED_OUT') {
         setSession(null)
         setAuthError('')
@@ -52,50 +52,85 @@ function App() {
       }
 
       if (_event === 'SIGNED_IN' && session?.user?.email) {
+        console.log('[Auth] User signed in:', session.user.email)
+        
         if (!session.user.email.endsWith('@nbsc.edu.ph')) {
+          console.log('[Auth] Email not institutional, signing out')
           supabase.auth.signOut()
           setSession(null)
           setAuthError('Only @nbsc.edu.ph email addresses are allowed.')
           toast.error('Access denied. Only @nbsc.edu.ph accounts are allowed.')
         } else {
-          // Check if user signed in with Google and sync metadata to profile
-          const identities = session.user.identities || []
-          const googleIdentity = identities.find(id => id.provider === 'google')
+          console.log('[Auth] Email is institutional, syncing profile...')
+          // Sync profile metadata from auth (for both Google and email sign-in)
+          // Since email is confirmed to be institutional, we can trust the metadata
+          console.log('[App] Auth metadata:', session.user.user_metadata)
+          const authName = session.user.user_metadata?.full_name ||
+                          session.user.user_metadata?.name ||
+                          `${session.user.user_metadata?.given_name || ''} ${session.user.user_metadata?.family_name || ''}`.trim() ||
+                          session.user.user_metadata?.given_name ||
+                          session.user.email?.split('@')[0]
 
-          if (googleIdentity) {
-            // Sync Google metadata to profile
-            const { data: existingProfile } = await supabase
+          const authAvatar = session.user.user_metadata?.avatar_url ||
+                           session.user.user_metadata?.picture
+
+          console.log('[App] Extracted name:', authName, 'avatar:', authAvatar)
+
+          try {
+            // Check if profile exists
+            const { data: existingProfile, error: profileError } = await supabase
               .from('profiles')
-              .select('id')
+              .select('id, full_name, avatar_url')
               .eq('id', session.user.id)
-              .single()
+              .maybeSingle()
+
+            console.log('[App] Existing profile:', existingProfile, 'Error:', profileError)
 
             if (existingProfile) {
-              // Update profile with Google metadata
-              await supabase
+              // Update existing profile with metadata
+              const { error: updateError } = await supabase
                 .from('profiles')
                 .update({
-                  full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name,
-                  avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture
+                  full_name: authName,
+                  avatar_url: authAvatar
                 })
                 .eq('id', session.user.id)
+
+              console.log('[App] Profile update error:', updateError)
             } else {
-              // Create profile with Google metadata
-              await supabase
+              // Create profile (in case trigger didn't fire for existing users)
+              const { error: createError } = await supabase
                 .from('profiles')
                 .insert({
                   id: session.user.id,
                   email: session.user.email,
-                  full_name: session.user.user_metadata?.full_name || session.user.user_metadata?.name,
-                  avatar_url: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture,
+                  full_name: authName,
+                  avatar_url: authAvatar,
                   role: 'student',
                   student_id: session.user.email.split('@')[0]
                 })
+
+              console.log('[App] Profile create error:', createError)
             }
+          } catch (err) {
+            console.error('[App] Profile sync error:', err)
+            // Don't block sign-in if profile sync fails
           }
 
+          console.log('[App] Setting session')
           setSession(session)
           setAuthError('')
+          // Check if user has both Google and password identities
+          const hasGoogle = session.user.identities?.some(i => i.provider === 'google')
+          const hasPassword = session.user.identities?.some(i => i.provider === 'email')
+          
+          if (hasGoogle && hasPassword) {
+            console.log('[App] User has both Google and password sign-in methods linked')
+          } else if (hasGoogle && !hasPassword) {
+            console.log('[App] User has Google only - can add password in Profile')
+          } else if (!hasGoogle && hasPassword) {
+            console.log('[App] User has password only - can link Google in Profile')
+          }
         }
         setLoading(false)
         return

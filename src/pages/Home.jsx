@@ -1,8 +1,30 @@
 import { useState, useEffect, useRef } from 'react'
-import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection } from '../utils/databaseService'
+import {
+  getStudentEnrollments,
+  getMessages,
+  sendMessage,
+  editMessage,
+  unsendMessage,
+  pinMessage,
+  unpinMessage,
+  subscribeToMessages,
+  subscribeToSeen,
+  subscribeToMembers,
+  leaveSection,
+  findSectionByCode,
+  createSection,
+  getAllCourses,
+  enrollInSection,
+  syncProfileFromAuth,
+  updateProfile,
+  saveStudentSubjects,
+  getRecentMessages,
+  getSeenReceipts,
+  getCourseMembers,
+} from '../utils/databaseService.js'
+import '../styles/Home.css'
 
 function UploadIcon(props) {
   return (
@@ -55,7 +77,7 @@ function SendIcon(props) {
 }
 
 // ── Thread view with real-time messaging ─────────────────────────────────
-function ThreadView({ subject, onBack }) {
+function ThreadView({ subject, onBack, onLeave, isLeaving }) {
   const [messages, setMessages]         = useState([])
   const [text, setText]                 = useState('')
   const [sending, setSending]           = useState(false)
@@ -69,6 +91,13 @@ function ThreadView({ subject, onBack }) {
   const [seenMap, setSeenMap]           = useState({})
   const [members, setMembers]           = useState([])   // enrolled students
   const [viewingMember, setViewingMember] = useState(null)  // member profile being viewed
+  const [showLeaveModal, setShowLeaveModal] = useState(false)
+  const [showMobilePanel, setShowMobilePanel] = useState(false)  // for schedule/members on mobile
+  const [showThreadMenu, setShowThreadMenu] = useState(false)  // 3-dot menu
+  const [showRightPanel, setShowRightPanel] = useState(false)  // right side panel
+  const [rightPanelContent, setRightPanelContent] = useState(null)  // 'schedule' or 'netiquette'
+  const [showScheduleModal, setShowScheduleModal] = useState(false)  // mobile modal for schedule
+  const [showNetiquetteModal, setShowNetiquetteModal] = useState(false)  // mobile modal for netiquette
   const bottomRef  = useRef(null)
   const inputRef   = useRef(null)
 
@@ -80,26 +109,26 @@ function ThreadView({ subject, onBack }) {
       uid = user?.id
     })
 
-    getMessages(subject.courseId).then(({ success, messages: msgs }) => {
+    getMessages(subject.sectionId).then(({ success, messages: msgs }) => {
       if (success) setMessages(msgs)
     })
 
-    getSeenReceipts(subject.courseId).then(({ receipts }) => {
+    getSeenReceipts(subject.sectionId).then(({ receipts }) => {
       if (receipts) buildSeenMap(receipts)
     })
 
     // Load members
-    getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+    getCourseMembers(subject.sectionId).then(({ members: m }) => setMembers(m))
 
     // Real-time: new & updated messages
     const msgChannel = subscribeToMessages(
-      subject.courseId,
+      subject.sectionId,
       (newMsg) => setMessages(prev => [...prev, newMsg]),
       (updated) => setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
     )
 
     // Real-time: seen receipts
-    const seenChannel = subscribeToSeen(subject.courseId, (receipt) => {
+    const seenChannel = subscribeToSeen(subject.sectionId, (receipt) => {
       setSeenMap(prev => {
         const existing = prev[receipt.message_id] || []
         if (existing.find(r => r.user_id === receipt.user_id)) return prev
@@ -108,8 +137,8 @@ function ThreadView({ subject, onBack }) {
     })
 
     // Real-time: enrollment changes (someone joins/leaves)
-    const memberChannel = subscribeToMembers(subject.courseId, () => {
-      getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+    const memberChannel = subscribeToMembers(subject.sectionId, () => {
+      getCourseMembers(subject.sectionId).then(({ members: m }) => setMembers(m))
     })
 
     return () => {
@@ -117,7 +146,7 @@ function ThreadView({ subject, onBack }) {
       seenChannel.unsubscribe()
       memberChannel.unsubscribe()
     }
-  }, [subject.courseId])
+  }, [subject.sectionId])
 
   // ── Mark messages as seen when they appear ──────────────────────────────
   useEffect(() => {
@@ -154,6 +183,15 @@ function ThreadView({ subject, onBack }) {
     }
   }, [])
 
+  // Close thread menu on outside click
+  useEffect(() => {
+    const close = () => setShowThreadMenu(false)
+    document.addEventListener('click', close)
+    return () => {
+      document.removeEventListener('click', close)
+    }
+  }, [])
+
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleSend = async (e) => {
     e.preventDefault()
@@ -162,7 +200,7 @@ function ThreadView({ subject, onBack }) {
     setSending(true)
     setText('')
     setReplyTo(null)
-    const result = await sendMessage(subject.courseId, trimmed, replyTo?.id ?? null)
+    const result = await sendMessage(subject.sectionId, trimmed, replyTo?.id ?? null)
     if (!result.success) setText(trimmed)
     setSending(false)
     inputRef.current?.focus()
@@ -265,82 +303,7 @@ function ThreadView({ subject, onBack }) {
   ]
 
   return (
-    <div className="home__thread-layout">
-
-      {/* ── LEFT: Schedule + Members ── */}
-      <aside className="home__thread-aside home__thread-aside--left">
-        <div className="home__aside-header">
-          <span className="home__aside-title">📅 Schedule</span>
-        </div>
-        <div className="home__aside-body">
-          {schedule ? (
-            <div className="home__schedule-info">
-              {(schedule.days || schedule.time) && (
-                <div className="home__schedule-badge">
-                  {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
-                  {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
-                </div>
-              )}
-              {schedule.room && (
-                <div className="home__schedule-row">
-                  <span className="home__schedule-label">Room</span>
-                  <span className="home__schedule-value">{schedule.room}</span>
-                </div>
-              )}
-              <div className="home__schedule-row">
-                <span className="home__schedule-label">Instructor</span>
-                <span className="home__schedule-value">
-                  {schedule.instructor
-                    ? schedule.instructor
-                    : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
-                  }
-                </span>
-              </div>
-            </div>
-          ) : (
-            <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
-          )}
-
-          {/* ── Members ── */}
-          <div className="home__members">
-            <div className="home__members-header">
-              <span className="home__schedule-label">Members</span>
-              <span className="home__members-count">{members.length}</span>
-            </div>
-            <div className="home__members-list">
-              {members.length === 0 && (
-                <p className="home__aside-empty">No members yet.</p>
-              )}
-              {members.map(m => {
-                const isMe = m.id === currentUser?.id
-                const isInstructor = m.role === 'instructor'
-                const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
-                const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-                return (
-                  <div
-                    key={m.id}
-                    className="home__member-item"
-                    onClick={() => setViewingMember(m)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div className="home__member-avatar">
-                      {m.avatar_url
-                        ? <img src={m.avatar_url} alt={name} />
-                        : <span>{initials}</span>
-                      }
-                    </div>
-                    <span className="home__member-name">
-                      {name}
-                      {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
-                      {isMe && <em className="home__member-you"> (You)</em>}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      </aside>
+    <div className={`home__thread-layout ${showRightPanel ? 'home__thread-layout--with-panel' : ''}`}>
 
       {/* ── CENTER: Chat ── */}
       <div className="home__thread">
@@ -355,23 +318,65 @@ function ThreadView({ subject, onBack }) {
             <span className="home__gc-code">{subject.code || 'Untitled'}</span>
             <span className="home__gc-desc">{subject.description}</span>
           </div>
-          <button type="button"
-            className={`home__netiquette-toggle ${showNetiquette ? 'home__netiquette-toggle--active' : ''}`}
-            onClick={() => setShowNetiquette(v => !v)} title="Netiquette Guidelines">
-            📋
-          </button>
+          <div style={{ position: 'relative', marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="home__thread-menu-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowThreadMenu(!showThreadMenu)
+              }}
+              aria-label="Thread options"
+            >
+              ⋯
+            </button>
+            {showThreadMenu && (
+              <div className="home__thread-menu-dropdown">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    // Use modal on mobile, panel on desktop
+                    if (window.innerWidth <= 768) {
+                      setShowScheduleModal(true)
+                    } else {
+                      setRightPanelContent('schedule')
+                      setShowRightPanel(true)
+                    }
+                  }}
+                >
+                  📅 Schedule & Members
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    // Use modal on mobile, panel on desktop
+                    if (window.innerWidth <= 768) {
+                      setShowNetiquetteModal(true)
+                    } else {
+                      setRightPanelContent('netiquette')
+                      setShowRightPanel(true)
+                    }
+                  }}
+                >
+                  📋 Netiquette
+                </button>
+                <button
+                  type="button"
+                  className="home__thread-menu-dropdown--danger"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    setShowLeaveModal(true)
+                  }}
+                >
+                  🚪 Leave Group Chat
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {showNetiquette && (
-          <div className="home__netiquette-inline">
-            <p className="home__netiquette-inline-title">Netiquette Guidelines</p>
-            {NETIQUETTE.map((item, i) => (
-              <div key={i} className="home__netiquette-inline-item">
-                <span>{item.icon}</span><span>{item.text}</span>
-              </div>
-            ))}
-          </div>
-        )}
 
         <div className="home__thread-body">
           {/* Pinned Messages Section */}
@@ -568,6 +573,291 @@ function ThreadView({ subject, onBack }) {
           </div>
         )}
 
+        {/* Leave confirmation modal */}
+        {showLeaveModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowLeaveModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--danger"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>Leave Group Chat</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowLeaveModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body">
+                <p className="home__modal-message">
+                  Are you sure you want to leave <strong>{subject.code}</strong>? You will no longer receive messages from this group chat.
+                </p>
+                <div className="home__modal-actions">
+                  <button
+                    type="button"
+                    className="home__btn home__btn--secondary"
+                    onClick={() => setShowLeaveModal(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="home__btn home__btn--danger"
+                    onClick={() => {
+                      setShowLeaveModal(false)
+                      onLeave && onLeave(subject.sectionId, subject.code)
+                    }}
+                    disabled={isLeaving}
+                  >
+                    {isLeaving ? 'Leaving...' : 'Leave'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Schedule modal for mobile */}
+        {showScheduleModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowScheduleModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>📅 Schedule & Members</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowScheduleModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                {/* Schedule */}
+                <div className="home__mobile-panel-section">
+                  {schedule ? (
+                    <div className="home__schedule-info">
+                      {(schedule.days || schedule.time) && (
+                        <div className="home__schedule-badge">
+                          {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                          {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                        </div>
+                      )}
+                      {schedule.room && (
+                        <div className="home__schedule-row">
+                          <span className="home__schedule-label">Room</span>
+                          <span className="home__schedule-value">{schedule.room}</span>
+                        </div>
+                      )}
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Instructor</span>
+                        <span className="home__schedule-value">
+                          {schedule.instructor
+                            ? schedule.instructor
+                            : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                          }
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                  )}
+                </div>
+
+                {/* Members */}
+                <div className="home__mobile-panel-section">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => {
+                            setViewingMember(m)
+                            setShowScheduleModal(false)
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Netiquette modal for mobile */}
+        {showNetiquetteModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowNetiquetteModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>📋 Netiquette</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowNetiquetteModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
+                <div className="home__netiquette-list">
+                  {NETIQUETTE.map((item, i) => (
+                    <div key={i} className="home__netiquette-item">
+                      <span className="home__netiquette-icon">{item.icon}</span>
+                      <span className="home__netiquette-text">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile panel overlay for schedule & members */}
+        {showMobilePanel && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowMobilePanel(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>Schedule & Members</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowMobilePanel(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                {/* Schedule */}
+                <div className="home__mobile-panel-section">
+                  <span className="home__panel-title">📅 Schedule</span>
+                  {schedule ? (
+                    <div className="home__schedule-info">
+                      {(schedule.days || schedule.time) && (
+                        <div className="home__schedule-badge">
+                          {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                          {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                        </div>
+                      )}
+                      {schedule.room && (
+                        <div className="home__schedule-row">
+                          <span className="home__schedule-label">Room</span>
+                          <span className="home__schedule-value">{schedule.room}</span>
+                        </div>
+                      )}
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Instructor</span>
+                        <span className="home__schedule-value">
+                          {schedule.instructor
+                            ? schedule.instructor
+                            : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                          }
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                  )}
+                </div>
+
+                {/* Members */}
+                <div className="home__mobile-panel-section">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => {
+                            setViewingMember(m)
+                            setShowMobilePanel(false)
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <form className="home__thread-input" onSubmit={handleSend}>
           <input
             ref={inputRef}
@@ -584,23 +874,113 @@ function ThreadView({ subject, onBack }) {
         </form>
       </div>
 
-      {/* ── RIGHT: Netiquette ── */}
-      <aside className="home__thread-aside home__thread-aside--right">
-        <div className="home__aside-header">
-          <span className="home__aside-title">📋 Netiquette</span>
-        </div>
-        <div className="home__aside-body">
-          <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
-          <div className="home__netiquette-list">
-            {NETIQUETTE.map((item, i) => (
-              <div key={i} className="home__netiquette-item">
-                <span className="home__netiquette-icon">{item.icon}</span>
-                <span className="home__netiquette-text">{item.text}</span>
+      {/* ── RIGHT: Panel content (Schedule/Members or Netiquette) ── */}
+      {showRightPanel && (
+        <>
+          {/* Mobile backdrop */}
+          <div 
+            className="home__panel-backdrop"
+            onClick={() => setShowRightPanel(false)}
+          />
+          <aside className="home__thread-aside home__thread-aside--right">
+            <div className="home__aside-header">
+              <span className="home__aside-title">
+                {rightPanelContent === 'schedule' ? '📅 Schedule' : '📋 Netiquette'}
+              </span>
+              <button
+                type="button"
+                className="home__aside-close"
+                onClick={() => setShowRightPanel(false)}
+                aria-label="Close panel"
+              >
+                ✕
+              </button>
+            </div>
+            {rightPanelContent === 'schedule' ? (
+              <div className="home__aside-body">
+                {schedule ? (
+                  <div className="home__schedule-info">
+                    {(schedule.days || schedule.time) && (
+                      <div className="home__schedule-badge">
+                        {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                        {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                      </div>
+                    )}
+                    {schedule.room && (
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Room</span>
+                        <span className="home__schedule-value">{schedule.room}</span>
+                      </div>
+                    )}
+                    <div className="home__schedule-row">
+                      <span className="home__schedule-label">Instructor</span>
+                      <span className="home__schedule-value">
+                        {schedule.instructor
+                          ? schedule.instructor
+                          : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                        }
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                )}
+
+                {/* ── Members ── */}
+                <div className="home__members">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => setViewingMember(m)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      </aside>
+            ) : (
+              <div className="home__aside-body">
+                <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
+                <div className="home__netiquette-list">
+                  {NETIQUETTE.map((item, i) => (
+                    <div key={i} className="home__netiquette-item">
+                      <span className="home__netiquette-icon">{item.icon}</span>
+                      <span className="home__netiquette-text">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </aside>
+        </>
+      )}
 
     </div>
   )
@@ -614,11 +994,15 @@ function Home({ session }) {
   const [studentName, setStudentName] = useState('')
   const [academicTerm, setAcademicTerm] = useState('') // Combined AY + Semester
   const [sectionCode, setSectionCode] = useState('')
+  const [showJoinInput, setShowJoinInput] = useState(false)
+  const [showCreateSection, setShowCreateSection] = useState(false)
+  const [sectionDescription, setSectionDescription] = useState('')
   const [subjects, setSubjects] = useState([])
   const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [loadingMessage, setLoadingMessage] = useState('Processing...')
   const fileInputRef = useRef(null)
   const toast = useToast()
 
@@ -627,7 +1011,14 @@ function Home({ session }) {
     let cancelled = false
 
     const loadEnrollments = async () => {
-      await syncProfileFromAuth()
+      const syncResult = await syncProfileFromAuth()
+      
+      // If session expired, sign out
+      if (!syncResult.success && syncResult.error?.includes('Session expired')) {
+        await supabase.auth.signOut()
+        window.location.href = '/'
+        return
+      }
 
       const result = await getStudentEnrollments()
       if (cancelled) return
@@ -636,25 +1027,32 @@ function Home({ session }) {
 
       if (!result.success) {
         console.error('[Home] enrollment fetch failed:', result.error)
+        // If auth error, sign out
+        if (result.error?.includes('does not exist') || result.error?.includes('403')) {
+          await supabase.auth.signOut()
+          window.location.href = '/'
+          return
+        }
         if (!cancelled) setView('prompt')
         return
       }
 
-      const valid = (result.enrollments ?? []).filter(e => e.courses?.code)
+      const valid = (result.enrollments ?? []).filter(e => e.sections)
+      console.log('[Home] Valid enrollments with sections:', valid)
 
       if (valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
         }))
+        console.log('[Home] Loaded subjects:', loaded)
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
 
@@ -779,15 +1177,19 @@ function Home({ session }) {
       return
     }
 
+    const upperCaseCode = sectionCode.trim().toUpperCase()
     setSaving(true)
+    setLoadingMessage('Finding section...')
     setError('')
 
     try {
-      const { success, section, error: findError } = await findSectionByCode(sectionCode.trim())
+      const { success, section, error: findError } = await findSectionByCode(upperCaseCode)
 
       if (!success) {
-        setError(findError || 'Section not found. Please check the code and try again.')
+        // Section doesn't exist - show create option with uppercase code
+        setSectionCode(upperCaseCode)
         setSaving(false)
+        setShowCreateSection(true)
         return
       }
 
@@ -797,10 +1199,8 @@ function Home({ session }) {
         return
       }
 
-      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(
-        section.id,
-        section.courses.id
-      )
+      setLoadingMessage('Joining section...')
+      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(section.id)
 
       if (!enrollSuccess) {
         setError(enrollError || 'Failed to join section')
@@ -815,20 +1215,19 @@ function Home({ session }) {
       }
 
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
         }))
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
       }
@@ -843,13 +1242,86 @@ function Home({ session }) {
     }
   }
 
+  const handleCreateSection = async () => {
+    if (!sectionCode.trim()) {
+      setError('Please enter a section code')
+      return
+    }
+
+    const upperCaseCode = sectionCode.trim().toUpperCase()
+    setSaving(true)
+    setLoadingMessage('Creating section...')
+    setError('')
+
+    try {
+      const { success, section, error: createError } = await createSection(
+        upperCaseCode,
+        sectionDescription.trim()
+      )
+
+      if (!success) {
+        setError(createError || 'Failed to create section')
+        setSaving(false)
+        return
+      }
+
+      setLoadingMessage('Enrolling in section...')
+      // Auto-enroll in the newly created section
+      const { success: enrollSuccess, error: enrollError } = await enrollInSection(section.id)
+      console.log('[CreateSection] Enrollment result:', { enrollSuccess, enrollError })
+
+      if (!enrollSuccess) {
+        setError(enrollError || 'Failed to enroll in section')
+        setSaving(false)
+        return
+      }
+
+      toast.success(`Section "${section.name}" created and joined successfully!`)
+      setShowCreateSection(false)
+      setSectionCode('')
+      setSectionDescription('')
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      console.log('[Home] Fresh enrollments after create:', fresh)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
+      console.log('[Home] Valid enrollments after create:', valid)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
+        }))
+        console.log('[Home] Loaded subjects after create:', loaded)
+        setSubjects(loaded)
+
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setView('chats')
+      console.log('[Home] View set to chats, current subjects:', subjects)
+    } catch (err) {
+      console.error(err)
+      setError('Failed to create section')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const confirmSubjects = async () => {
     setSaving(true)
+    setLoadingMessage('Processing your COR...')
     setError('')
 
     try {
       // 1. Update profile name if provided
       if (studentName.trim()) {
+        setLoadingMessage('Updating your profile...')
         const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
         if (!profileSuccess) {
           console.error('Failed to update profile name')
@@ -861,24 +1333,40 @@ function Home({ session }) {
       const notFoundSections = []
 
       for (const subject of subjects) {
-        const code = subject.code?.trim()
+        const code = subject.code?.trim().toUpperCase()
         if (!code) continue
 
+        setLoadingMessage(`Finding section ${code}...`)
         const { success, section, error: findError } = await findSectionByCode(code)
         
-        // If section is not found in database
-        if (!success || !section?.courses) {
-          console.error(`Failed to find section ${code}:`, findError)
-          notFoundSections.push(code)
-          toast.error(`Subject code "${code}" not found. Please check and try again.`) // <--- TOAST FOR NOT FOUND
+        // If section is not found in database, create it
+        if (!success) {
+          console.log(`Section ${code} not found, creating it...`)
+          setLoadingMessage(`Creating section ${code}...`)
+          const { success: createSuccess, section: newSection, error: createError } = await createSection(
+            code,
+            subject.description?.trim() || ''
+          )
+          
+          if (createSuccess && newSection) {
+            console.log(`Section ${code} created successfully`)
+            setLoadingMessage(`Enrolling in ${code}...`)
+            // Enroll in the newly created section
+            const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(newSection.id)
+            if (enrollSuccess && !alreadyEnrolled) {
+              joinedSections.push(newSection.name)
+            }
+          } else {
+            console.error(`Failed to create section ${code}:`, createError)
+            notFoundSections.push(code)
+            toast.error(`Failed to create section "${code}": ${createError || 'Unknown error'}`)
+          }
           continue
         }
 
-        // Enroll in section
-        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(
-          section.id,
-          section.courses.id
-        )
+        // Enroll in existing section
+        setLoadingMessage(`Enrolling in ${code}...`)
+        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(section.id)
 
         if (enrollSuccess && !alreadyEnrolled) {
           joinedSections.push(section.name)
@@ -889,25 +1377,54 @@ function Home({ session }) {
       if (joinedSections.length > 0) {
         toast.success(`Joined ${joinedSections.length} section${joinedSections.length !== 1 ? 's' : ''}: ${joinedSections.join(', ')}`)
       } else if (notFoundSections.length === 0) {
-        toast.info('No new sections joined.')
+        const result = await getStudentEnrollments()
+        if (cancelled) return
+
+        console.log('[Home] loadEnrollments result:', result)
+
+        if (!result.success) {
+          console.log('[Home] loadEnrollments failed:', result.error)
+          setError(result.error)
+          setView('error')
+          return
+        }
+
+        const valid = (result.enrollments ?? []).filter(e => e.sections)
+        console.log('[Home] Valid enrollments with sections:', valid)
+        
+        if (valid.length > 0) {
+          const loaded = valid.map((e) => ({
+            id: e.id,
+            code: e.sections.name,
+            description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+            courseId: e.sections.courses?.id,
+            sectionId: e.section_id,
+          }))
+          console.log('[Home] Loaded subjects:', loaded)
+          setSubjects(loaded)
+
+          const sectionIds = loaded.map(s => s.sectionId)
+          getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+            if (success) setRecentMessages(msgs)
+          })
+        }
       }
 
       // 4. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
         }))
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
       }
@@ -941,6 +1458,55 @@ function Home({ session }) {
   const backToChats = () => {
     setActiveThread(null)
     setView('chats')
+  }
+
+  const handleLeaveSection = async (sectionId, code) => {
+    setSaving(true)
+    setLoadingMessage('Leaving section...')
+    try {
+      const { success, error } = await leaveSection(sectionId)
+
+      if (!success) {
+        toast.error(error || 'Failed to leave section')
+        setSaving(false)
+        return
+      }
+
+      toast.success(`Left ${code} successfully`)
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
+        }))
+        setSubjects(loaded)
+
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+        
+        // Clear active thread and redirect to home/chats view
+        setActiveThread(null)
+        setView('chats')
+      } else {
+        setSubjects([])
+        setRecentMessages([])
+        setActiveThread(null)
+        setView('prompt')
+      }
+    } catch (err) {
+      console.error('Error leaving section:', err)
+      toast.error('Failed to leave section')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const formatRelativeTime = (iso) => {
@@ -1096,23 +1662,17 @@ function Home({ session }) {
       )}
 
       {view === 'processing' && (
-        <div className="home__card home__card--center">
-          <div className="home__spinner" />
-          <h2 className="home__title">Scanning your COR</h2>
-          <p className="home__subtitle">This may take a few seconds…</p>
-          <div className="home__progress-track">
-            <div className="home__progress-fill" style={{ width: `${progress}%` }} />
+        <div className="home__modal-overlay">
+          <div className="home__modal-content home__modal-content--loading">
+            <div className="home__loading-spinner" />
+            <p className="home__loading-text">Scanning your COR…</p>
+            <div className="home__progress-track" style={{ width: '200px', marginTop: '16px' }}>
+              <div className="home__progress-fill" style={{ width: `${progress}%` }} />
+            </div>
           </div>
         </div>
       )}
 
-      {saving && (
-        <div className="home__card home__card--center">
-          <div className="home__spinner" />
-          <h2 className="home__title">Joining Sections</h2>
-          <p className="home__subtitle">This may take a few seconds…</p>
-        </div>
-      )}
 
       {view === 'review' && (
         <div className="home__card">
@@ -1222,17 +1782,24 @@ function Home({ session }) {
         <div className="home__chats">
           <div className="home__chats-header">
             <h2 className="home__title">Your Sections</h2>
-            <button type="button" className="home__reupload" onClick={startOver}>
-              Re-upload COR
-            </button>
+            <div className="home__chats-actions">
+              <button type="button" className="home__reupload" onClick={() => setShowJoinInput(true)}>
+                Join Section
+              </button>
+              <button type="button" className="home__reupload" onClick={startOver}>
+                Re-upload COR
+              </button>
+            </div>
           </div>
+
+          {error && <p className="home__error">{error}</p>}
 
           {subjects.length === 0 ? (
             <p className="home__empty">No sections found.</p>
           ) : (
             <div className="home__gc-list">
               {subjects.map((subject) => {
-                const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
+                const recentMsg = recentMessages.find(m => m.section_id === subject.sectionId)
                 return (
                   <button
                     key={subject.id}
@@ -1269,7 +1836,178 @@ function Home({ session }) {
         <ThreadView
           subject={activeThread}
           onBack={backToChats}
+          onLeave={handleLeaveSection}
+          isLeaving={saving}
         />
+      )}
+
+      {/* Join section modal */}
+      {showJoinInput && (
+        <div
+          className="home__modal-overlay"
+          onClick={() => {
+            setShowJoinInput(false)
+            setSectionCode('')
+            setError('')
+          }}
+        >
+          <div
+            className="home__modal-content"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="home__modal-header">
+              <h3>Join Section</h3>
+              <button
+                type="button"
+                className="home__modal-close"
+                onClick={() => {
+                  setShowJoinInput(false)
+                  setSectionCode('')
+                  setError('')
+                }}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="home__modal-body">
+              <p className="home__modal-message">
+                Enter the section code provided by your instructor to join their group chat.
+              </p>
+              <div className="home__modal-field-group">
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Section code (e.g., BSIT 3A)"
+                  value={sectionCode}
+                  onChange={(e) => setSectionCode(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
+                  disabled={saving}
+                  autoFocus
+                />
+              </div>
+              {error && <p className="home__error">{error}</p>}
+              <div className="home__modal-actions">
+                <button
+                  type="button"
+                  className="home__btn home__btn--secondary"
+                  onClick={() => {
+                    setShowJoinInput(false)
+                    setSectionCode('')
+                    setError('')
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="home__btn home__btn--primary"
+                  onClick={joinBySectionCode}
+                  disabled={saving || !sectionCode.trim()}
+                >
+                  {saving ? 'Joining...' : 'Join'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create section modal */}
+      {showCreateSection && (
+        <div
+          className="home__modal-overlay"
+          onClick={() => {
+            setShowCreateSection(false)
+            setSectionCode('')
+            setSectionDescription('')
+            setError('')
+          }}
+        >
+          <div
+            className="home__modal-content"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="home__modal-header">
+              <h3>Create Section</h3>
+              <button
+                type="button"
+                className="home__modal-close"
+                onClick={() => {
+                  setShowCreateSection(false)
+                  setSectionCode('')
+                  setSectionDescription('')
+                  setError('')
+                }}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="home__modal-body">
+              <p className="home__modal-message">
+                Section "{sectionCode.trim()}" not found. Create it to start a group chat for your class.
+              </p>
+              <div className="home__modal-field-group">
+                <label className="home__label">Section Code</label>
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Section code (e.g., ICS74)"
+                  value={sectionCode}
+                  onChange={(e) => setSectionCode(e.target.value)}
+                  disabled={saving}
+                />
+              </div>
+              <div className="home__modal-field-group">
+                <label className="home__label">Description</label>
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Description (e.g., Advance Database System)"
+                  value={sectionDescription}
+                  onChange={(e) => setSectionDescription(e.target.value)}
+                  disabled={saving}
+                />
+              </div>
+              {error && <p className="home__error">{error}</p>}
+              <div className="home__modal-actions">
+                <button
+                  type="button"
+                  className="home__btn home__btn--secondary"
+                  onClick={() => {
+                    setShowCreateSection(false)
+                    setSectionCode('')
+                    setSectionDescription('')
+                    setError('')
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="home__btn home__btn--primary"
+                  onClick={handleCreateSection}
+                  disabled={saving || !sectionCode.trim() || !sectionDescription.trim()}
+                >
+                  {saving ? 'Creating...' : 'Create & Join'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Loading overlay */}
+      {saving && (
+        <div className="home__modal-overlay">
+          <div className="home__modal-content home__modal-content--loading">
+            <div className="home__loading-spinner"></div>
+            <p className="home__loading-text">{loadingMessage}</p>
+          </div>
+        </div>
       )}
     </div>
   )
