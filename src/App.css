@@ -150,6 +150,22 @@
   width: 100%;
 }
 
+/* Override content-area for thread view to use full space */
+.content-area.content-area--thread {
+  padding: 0 !important;
+  display: block;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+}
+
+/* Target when home component is in thread view */
+.content-area:has(.home--thread) {
+  padding: 0 !important;
+  display: block;
+  height: calc(100vh - 64px);
+  overflow: hidden;
+}
+
 /* ── Large screen spacing ── */
 @media (min-width: 1400px) {
   .content-area {

@@ -92,6 +92,12 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
   const [members, setMembers]           = useState([])   // enrolled students
   const [viewingMember, setViewingMember] = useState(null)  // member profile being viewed
   const [showLeaveModal, setShowLeaveModal] = useState(false)
+  const [showMobilePanel, setShowMobilePanel] = useState(false)  // for schedule/members on mobile
+  const [showThreadMenu, setShowThreadMenu] = useState(false)  // 3-dot menu
+  const [showRightPanel, setShowRightPanel] = useState(false)  // right side panel
+  const [rightPanelContent, setRightPanelContent] = useState(null)  // 'schedule' or 'netiquette'
+  const [showScheduleModal, setShowScheduleModal] = useState(false)  // mobile modal for schedule
+  const [showNetiquetteModal, setShowNetiquetteModal] = useState(false)  // mobile modal for netiquette
   const bottomRef  = useRef(null)
   const inputRef   = useRef(null)
 
@@ -174,6 +180,15 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
     return () => {
       document.removeEventListener('click', close)
       document.removeEventListener('scroll', close, true)
+    }
+  }, [])
+
+  // Close thread menu on outside click
+  useEffect(() => {
+    const close = () => setShowThreadMenu(false)
+    document.addEventListener('click', close)
+    return () => {
+      document.removeEventListener('click', close)
     }
   }, [])
 
@@ -288,82 +303,7 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
   ]
 
   return (
-    <div className="home__thread-layout">
-
-      {/* ── LEFT: Schedule + Members ── */}
-      <aside className="home__thread-aside home__thread-aside--left">
-        <div className="home__aside-header">
-          <span className="home__aside-title">📅 Schedule</span>
-        </div>
-        <div className="home__aside-body">
-          {schedule ? (
-            <div className="home__schedule-info">
-              {(schedule.days || schedule.time) && (
-                <div className="home__schedule-badge">
-                  {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
-                  {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
-                </div>
-              )}
-              {schedule.room && (
-                <div className="home__schedule-row">
-                  <span className="home__schedule-label">Room</span>
-                  <span className="home__schedule-value">{schedule.room}</span>
-                </div>
-              )}
-              <div className="home__schedule-row">
-                <span className="home__schedule-label">Instructor</span>
-                <span className="home__schedule-value">
-                  {schedule.instructor
-                    ? schedule.instructor
-                    : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
-                  }
-                </span>
-              </div>
-            </div>
-          ) : (
-            <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
-          )}
-
-          {/* ── Members ── */}
-          <div className="home__members">
-            <div className="home__members-header">
-              <span className="home__schedule-label">Members</span>
-              <span className="home__members-count">{members.length}</span>
-            </div>
-            <div className="home__members-list">
-              {members.length === 0 && (
-                <p className="home__aside-empty">No members yet.</p>
-              )}
-              {members.map(m => {
-                const isMe = m.id === currentUser?.id
-                const isInstructor = m.role === 'instructor'
-                const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
-                const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
-                return (
-                  <div
-                    key={m.id}
-                    className="home__member-item"
-                    onClick={() => setViewingMember(m)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <div className="home__member-avatar">
-                      {m.avatar_url
-                        ? <img src={m.avatar_url} alt={name} />
-                        : <span>{initials}</span>
-                      }
-                    </div>
-                    <span className="home__member-name">
-                      {name}
-                      {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
-                      {isMe && <em className="home__member-you"> (You)</em>}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      </aside>
+    <div className={`home__thread-layout ${showRightPanel ? 'home__thread-layout--with-panel' : ''}`}>
 
       {/* ── CENTER: Chat ── */}
       <div className="home__thread">
@@ -378,31 +318,65 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
             <span className="home__gc-code">{subject.code || 'Untitled'}</span>
             <span className="home__gc-desc">{subject.description}</span>
           </div>
-          <button
-            type="button"
-            className="home__thread-leave-btn"
-            onClick={() => setShowLeaveModal(true)}
-            title="Leave section"
-          >
-            Leave
-          </button>
-          <button type="button"
-            className={`home__netiquette-toggle ${showNetiquette ? 'home__netiquette-toggle--active' : ''}`}
-            onClick={() => setShowNetiquette(v => !v)} title="Netiquette Guidelines">
-            📋
-          </button>
+          <div style={{ position: 'relative', marginLeft: 'auto' }}>
+            <button
+              type="button"
+              className="home__thread-menu-btn"
+              onClick={(e) => {
+                e.stopPropagation()
+                setShowThreadMenu(!showThreadMenu)
+              }}
+              aria-label="Thread options"
+            >
+              ⋯
+            </button>
+            {showThreadMenu && (
+              <div className="home__thread-menu-dropdown">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    // Use modal on mobile, panel on desktop
+                    if (window.innerWidth <= 768) {
+                      setShowScheduleModal(true)
+                    } else {
+                      setRightPanelContent('schedule')
+                      setShowRightPanel(true)
+                    }
+                  }}
+                >
+                  📅 Schedule & Members
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    // Use modal on mobile, panel on desktop
+                    if (window.innerWidth <= 768) {
+                      setShowNetiquetteModal(true)
+                    } else {
+                      setRightPanelContent('netiquette')
+                      setShowRightPanel(true)
+                    }
+                  }}
+                >
+                  📋 Netiquette
+                </button>
+                <button
+                  type="button"
+                  className="home__thread-menu-dropdown--danger"
+                  onClick={() => {
+                    setShowThreadMenu(false)
+                    setShowLeaveModal(true)
+                  }}
+                >
+                  🚪 Leave Group Chat
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
-        {showNetiquette && (
-          <div className="home__netiquette-inline">
-            <p className="home__netiquette-inline-title">Netiquette Guidelines</p>
-            {NETIQUETTE.map((item, i) => (
-              <div key={i} className="home__netiquette-inline-item">
-                <span>{item.icon}</span><span>{item.text}</span>
-              </div>
-            ))}
-          </div>
-        )}
 
         <div className="home__thread-body">
           {/* Pinned Messages Section */}
@@ -649,6 +623,241 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
           </div>
         )}
 
+        {/* Schedule modal for mobile */}
+        {showScheduleModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowScheduleModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>📅 Schedule & Members</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowScheduleModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                {/* Schedule */}
+                <div className="home__mobile-panel-section">
+                  {schedule ? (
+                    <div className="home__schedule-info">
+                      {(schedule.days || schedule.time) && (
+                        <div className="home__schedule-badge">
+                          {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                          {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                        </div>
+                      )}
+                      {schedule.room && (
+                        <div className="home__schedule-row">
+                          <span className="home__schedule-label">Room</span>
+                          <span className="home__schedule-value">{schedule.room}</span>
+                        </div>
+                      )}
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Instructor</span>
+                        <span className="home__schedule-value">
+                          {schedule.instructor
+                            ? schedule.instructor
+                            : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                          }
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                  )}
+                </div>
+
+                {/* Members */}
+                <div className="home__mobile-panel-section">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => {
+                            setViewingMember(m)
+                            setShowScheduleModal(false)
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Netiquette modal for mobile */}
+        {showNetiquetteModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowNetiquetteModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>📋 Netiquette</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowNetiquetteModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
+                <div className="home__netiquette-list">
+                  {NETIQUETTE.map((item, i) => (
+                    <div key={i} className="home__netiquette-item">
+                      <span className="home__netiquette-icon">{item.icon}</span>
+                      <span className="home__netiquette-text">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Mobile panel overlay for schedule & members */}
+        {showMobilePanel && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowMobilePanel(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--mobile-panel"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>Schedule & Members</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowMobilePanel(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body home__modal-body--scrollable">
+                {/* Schedule */}
+                <div className="home__mobile-panel-section">
+                  <span className="home__panel-title">📅 Schedule</span>
+                  {schedule ? (
+                    <div className="home__schedule-info">
+                      {(schedule.days || schedule.time) && (
+                        <div className="home__schedule-badge">
+                          {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                          {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                        </div>
+                      )}
+                      {schedule.room && (
+                        <div className="home__schedule-row">
+                          <span className="home__schedule-label">Room</span>
+                          <span className="home__schedule-value">{schedule.room}</span>
+                        </div>
+                      )}
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Instructor</span>
+                        <span className="home__schedule-value">
+                          {schedule.instructor
+                            ? schedule.instructor
+                            : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                          }
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                  )}
+                </div>
+
+                {/* Members */}
+                <div className="home__mobile-panel-section">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => {
+                            setViewingMember(m)
+                            setShowMobilePanel(false)
+                          }}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <form className="home__thread-input" onSubmit={handleSend}>
           <input
             ref={inputRef}
@@ -665,23 +874,113 @@ function ThreadView({ subject, onBack, onLeave, isLeaving }) {
         </form>
       </div>
 
-      {/* ── RIGHT: Netiquette ── */}
-      <aside className="home__thread-aside home__thread-aside--right">
-        <div className="home__aside-header">
-          <span className="home__aside-title">📋 Netiquette</span>
-        </div>
-        <div className="home__aside-body">
-          <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
-          <div className="home__netiquette-list">
-            {NETIQUETTE.map((item, i) => (
-              <div key={i} className="home__netiquette-item">
-                <span className="home__netiquette-icon">{item.icon}</span>
-                <span className="home__netiquette-text">{item.text}</span>
+      {/* ── RIGHT: Panel content (Schedule/Members or Netiquette) ── */}
+      {showRightPanel && (
+        <>
+          {/* Mobile backdrop */}
+          <div 
+            className="home__panel-backdrop"
+            onClick={() => setShowRightPanel(false)}
+          />
+          <aside className="home__thread-aside home__thread-aside--right">
+            <div className="home__aside-header">
+              <span className="home__aside-title">
+                {rightPanelContent === 'schedule' ? '📅 Schedule' : '📋 Netiquette'}
+              </span>
+              <button
+                type="button"
+                className="home__aside-close"
+                onClick={() => setShowRightPanel(false)}
+                aria-label="Close panel"
+              >
+                ✕
+              </button>
+            </div>
+            {rightPanelContent === 'schedule' ? (
+              <div className="home__aside-body">
+                {schedule ? (
+                  <div className="home__schedule-info">
+                    {(schedule.days || schedule.time) && (
+                      <div className="home__schedule-badge">
+                        {schedule.days && <span className="home__schedule-days">{schedule.days}</span>}
+                        {schedule.time && <span className="home__schedule-time">{schedule.time}</span>}
+                      </div>
+                    )}
+                    {schedule.room && (
+                      <div className="home__schedule-row">
+                        <span className="home__schedule-label">Room</span>
+                        <span className="home__schedule-value">{schedule.room}</span>
+                      </div>
+                    )}
+                    <div className="home__schedule-row">
+                      <span className="home__schedule-label">Instructor</span>
+                      <span className="home__schedule-value">
+                        {schedule.instructor
+                          ? schedule.instructor
+                          : <em style={{ color: '#94a3b8', fontSize: '12px' }}>Not set</em>
+                        }
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="home__aside-empty">Schedule not available. Re-upload your COR to extract schedule information.</p>
+                )}
+
+                {/* ── Members ── */}
+                <div className="home__members">
+                  <div className="home__members-header">
+                    <span className="home__schedule-label">Members</span>
+                    <span className="home__members-count">{members.length}</span>
+                  </div>
+                  <div className="home__members-list">
+                    {members.length === 0 && (
+                      <p className="home__aside-empty">No members yet.</p>
+                    )}
+                    {members.map(m => {
+                      const isMe = m.id === currentUser?.id
+                      const isInstructor = m.role === 'instructor'
+                      const name = m.full_name || m.email?.split('@')[0] || 'Unknown'
+                      const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+                      return (
+                        <div
+                          key={m.id}
+                          className="home__member-item"
+                          onClick={() => setViewingMember(m)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <div className="home__member-avatar">
+                            {m.avatar_url
+                              ? <img src={m.avatar_url} alt={name} />
+                              : <span>{initials}</span>
+                            }
+                          </div>
+                          <span className="home__member-name">
+                            {name}
+                            {isInstructor && <em className="home__member-instructor"> (Instructor)</em>}
+                            {isMe && <em className="home__member-you"> (You)</em>}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      </aside>
+            ) : (
+              <div className="home__aside-body">
+                <p className="home__aside-intro">Guidelines for respectful online communication in this group chat.</p>
+                <div className="home__netiquette-list">
+                  {NETIQUETTE.map((item, i) => (
+                    <div key={i} className="home__netiquette-item">
+                      <span className="home__netiquette-icon">{item.icon}</span>
+                      <span className="home__netiquette-text">{item.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </aside>
+        </>
+      )}
 
     </div>
   )
