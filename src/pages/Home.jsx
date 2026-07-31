@@ -77,7 +77,7 @@ function SendIcon(props) {
 }
 
 // ── Thread view with real-time messaging ─────────────────────────────────
-function ThreadView({ subject, onBack, onLeave }) {
+function ThreadView({ subject, onBack, onLeave, isLeaving }) {
   const [messages, setMessages]         = useState([])
   const [text, setText]                 = useState('')
   const [sending, setSending]           = useState(false)
@@ -637,10 +637,11 @@ function ThreadView({ subject, onBack, onLeave }) {
                     className="home__btn home__btn--danger"
                     onClick={() => {
                       setShowLeaveModal(false)
-                      onLeave && onLeave(subject.courseId, subject.code)
+                      onLeave && onLeave(subject.sectionId, subject.code)
                     }}
+                    disabled={isLeaving}
                   >
-                    Leave
+                    {isLeaving ? 'Leaving...' : 'Leave'}
                   </button>
                 </div>
               </div>
@@ -702,6 +703,7 @@ function Home({ session }) {
   const [activeThread, setActiveThread] = useState(null)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [loadingMessage, setLoadingMessage] = useState('Processing...')
   const fileInputRef = useRef(null)
   const toast = useToast()
 
@@ -878,6 +880,7 @@ function Home({ session }) {
 
     const upperCaseCode = sectionCode.trim().toUpperCase()
     setSaving(true)
+    setLoadingMessage('Finding section...')
     setError('')
 
     try {
@@ -897,6 +900,7 @@ function Home({ session }) {
         return
       }
 
+      setLoadingMessage('Joining section...')
       const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(section.id)
 
       if (!enrollSuccess) {
@@ -947,6 +951,7 @@ function Home({ session }) {
 
     const upperCaseCode = sectionCode.trim().toUpperCase()
     setSaving(true)
+    setLoadingMessage('Creating section...')
     setError('')
 
     try {
@@ -961,8 +966,8 @@ function Home({ session }) {
         return
       }
 
+      setLoadingMessage('Enrolling in section...')
       // Auto-enroll in the newly created section
-      console.log('[CreateSection] Attempting to enroll in section:', section.id)
       const { success: enrollSuccess, error: enrollError } = await enrollInSection(section.id)
       console.log('[CreateSection] Enrollment result:', { enrollSuccess, enrollError })
 
@@ -1011,11 +1016,13 @@ function Home({ session }) {
 
   const confirmSubjects = async () => {
     setSaving(true)
+    setLoadingMessage('Processing your COR...')
     setError('')
 
     try {
       // 1. Update profile name if provided
       if (studentName.trim()) {
+        setLoadingMessage('Updating your profile...')
         const { success: profileSuccess } = await updateProfile(studentName.trim(), null)
         if (!profileSuccess) {
           console.error('Failed to update profile name')
@@ -1030,11 +1037,13 @@ function Home({ session }) {
         const code = subject.code?.trim().toUpperCase()
         if (!code) continue
 
+        setLoadingMessage(`Finding section ${code}...`)
         const { success, section, error: findError } = await findSectionByCode(code)
         
         // If section is not found in database, create it
         if (!success) {
           console.log(`Section ${code} not found, creating it...`)
+          setLoadingMessage(`Creating section ${code}...`)
           const { success: createSuccess, section: newSection, error: createError } = await createSection(
             code,
             subject.description?.trim() || ''
@@ -1042,6 +1051,7 @@ function Home({ session }) {
           
           if (createSuccess && newSection) {
             console.log(`Section ${code} created successfully`)
+            setLoadingMessage(`Enrolling in ${code}...`)
             // Enroll in the newly created section
             const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(newSection.id)
             if (enrollSuccess && !alreadyEnrolled) {
@@ -1056,6 +1066,7 @@ function Home({ session }) {
         }
 
         // Enroll in existing section
+        setLoadingMessage(`Enrolling in ${code}...`)
         const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(section.id)
 
         if (enrollSuccess && !alreadyEnrolled) {
@@ -1152,6 +1163,7 @@ function Home({ session }) {
 
   const handleLeaveSection = async (sectionId, code) => {
     setSaving(true)
+    setLoadingMessage('Leaving section...')
     try {
       const { success, error } = await leaveSection(sectionId)
 
@@ -1180,9 +1192,14 @@ function Home({ session }) {
         getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
+        
+        // Clear active thread and redirect to home/chats view
+        setActiveThread(null)
+        setView('chats')
       } else {
         setSubjects([])
         setRecentMessages([])
+        setActiveThread(null)
         setView('prompt')
       }
     } catch (err) {
@@ -1346,23 +1363,17 @@ function Home({ session }) {
       )}
 
       {view === 'processing' && (
-        <div className="home__card home__card--center">
-          <div className="home__spinner" />
-          <h2 className="home__title">Scanning your COR</h2>
-          <p className="home__subtitle">This may take a few seconds…</p>
-          <div className="home__progress-track">
-            <div className="home__progress-fill" style={{ width: `${progress}%` }} />
+        <div className="home__modal-overlay">
+          <div className="home__modal-content home__modal-content--loading">
+            <div className="home__loading-spinner" />
+            <p className="home__loading-text">Scanning your COR…</p>
+            <div className="home__progress-track" style={{ width: '200px', marginTop: '16px' }}>
+              <div className="home__progress-fill" style={{ width: `${progress}%` }} />
+            </div>
           </div>
         </div>
       )}
 
-      {saving && (
-        <div className="home__card home__card--center">
-          <div className="home__spinner" />
-          <h2 className="home__title">Joining Sections</h2>
-          <p className="home__subtitle">This may take a few seconds…</p>
-        </div>
-      )}
 
       {view === 'review' && (
         <div className="home__card">
@@ -1527,6 +1538,7 @@ function Home({ session }) {
           subject={activeThread}
           onBack={backToChats}
           onLeave={handleLeaveSection}
+          isLeaving={saving}
         />
       )}
 
@@ -1685,6 +1697,16 @@ function Home({ session }) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Loading overlay */}
+      {saving && (
+        <div className="home__modal-overlay">
+          <div className="home__modal-content home__modal-content--loading">
+            <div className="home__loading-spinner"></div>
+            <p className="home__loading-text">{loadingMessage}</p>
           </div>
         </div>
       )}

@@ -720,7 +720,10 @@ export async function leaveSection(sectionId) {
       .eq('student_id', user.id)
       .eq('section_id', sectionId)
 
-    if (error) throw error
+    if (error) {
+      console.error('Supabase delete error:', error)
+      throw error
+    }
     return { success: true }
   } catch (err) {
     console.error('Error leaving section:', err)
