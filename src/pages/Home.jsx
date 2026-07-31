@@ -1,8 +1,30 @@
 import { useState, useEffect, useRef } from 'react'
-import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection, leaveSection } from '../utils/databaseService'
+import {
+  getStudentEnrollments,
+  getMessages,
+  sendMessage,
+  editMessage,
+  unsendMessage,
+  pinMessage,
+  unpinMessage,
+  subscribeToMessages,
+  subscribeToSeen,
+  subscribeToMembers,
+  leaveSection,
+  findSectionByCode,
+  createSection,
+  getAllCourses,
+  enrollInSection,
+  syncProfileFromAuth,
+  updateProfile,
+  saveStudentSubjects,
+  getRecentMessages,
+  getSeenReceipts,
+  getCourseMembers,
+} from '../utils/databaseService.js'
+import '../styles/Home.css'
 
 function UploadIcon(props) {
   return (
@@ -673,6 +695,8 @@ function Home({ session }) {
   const [academicTerm, setAcademicTerm] = useState('') // Combined AY + Semester
   const [sectionCode, setSectionCode] = useState('')
   const [showJoinInput, setShowJoinInput] = useState(false)
+  const [showCreateSection, setShowCreateSection] = useState(false)
+  const [sectionDescription, setSectionDescription] = useState('')
   const [subjects, setSubjects] = useState([])
   const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
@@ -712,21 +736,22 @@ function Home({ session }) {
         return
       }
 
-      const valid = (result.enrollments ?? []).filter(e => e.courses?.code)
+      const valid = (result.enrollments ?? []).filter(e => e.sections)
+      console.log('[Home] Valid enrollments with sections:', valid)
 
       if (valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
         }))
+        console.log('[Home] Loaded subjects:', loaded)
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
 
@@ -858,8 +883,9 @@ function Home({ session }) {
       const { success, section, error: findError } = await findSectionByCode(sectionCode.trim())
 
       if (!success) {
-        setError(findError || 'Section not found. Please check the code and try again.')
+        // Section doesn't exist - show create option
         setSaving(false)
+        setShowCreateSection(true)
         return
       }
 
@@ -884,15 +910,14 @@ function Home({ session }) {
       }
 
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
           code: e.sections.name,
-          description: e.sections.courses.title || e.sections.courses.code,
-          courseId: e.sections.courses.id,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
           sectionId: e.section_id,
-          schedule: null,
         }))
         setSubjects(loaded)
 
@@ -907,6 +932,75 @@ function Home({ session }) {
     } catch (err) {
       console.error(err)
       setError('Failed to join section')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCreateSection = async () => {
+    if (!sectionCode.trim()) {
+      setError('Please enter a section code')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+
+    try {
+      const { success, section, error: createError } = await createSection(
+        sectionCode.trim(),
+        sectionDescription.trim()
+      )
+
+      if (!success) {
+        setError(createError || 'Failed to create section')
+        setSaving(false)
+        return
+      }
+
+      // Auto-enroll in the newly created section
+      console.log('[CreateSection] Attempting to enroll in section:', section.id)
+      const { success: enrollSuccess, error: enrollError } = await enrollInSection(section.id)
+      console.log('[CreateSection] Enrollment result:', { enrollSuccess, enrollError })
+
+      if (!enrollSuccess) {
+        setError(enrollError || 'Failed to enroll in section')
+        setSaving(false)
+        return
+      }
+
+      toast.success(`Section "${section.name}" created and joined successfully!`)
+      setShowCreateSection(false)
+      setSectionCode('')
+      setSectionDescription('')
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      console.log('[Home] Fresh enrollments after create:', fresh)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
+      console.log('[Home] Valid enrollments after create:', valid)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.sections.name,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
+          sectionId: e.section_id,
+        }))
+        console.log('[Home] Loaded subjects after create:', loaded)
+        setSubjects(loaded)
+
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      }
+
+      setView('chats')
+      console.log('[Home] View set to chats, current subjects:', subjects)
+    } catch (err) {
+      console.error(err)
+      setError('Failed to create section')
     } finally {
       setSaving(false)
     }
@@ -955,20 +1049,49 @@ function Home({ session }) {
       if (joinedSections.length > 0) {
         toast.success(`Joined ${joinedSections.length} section${joinedSections.length !== 1 ? 's' : ''}: ${joinedSections.join(', ')}`)
       } else if (notFoundSections.length === 0) {
-        toast.info('No new sections joined.')
+        const result = await getStudentEnrollments()
+        if (cancelled) return
+
+        console.log('[Home] loadEnrollments result:', result)
+
+        if (!result.success) {
+          console.log('[Home] loadEnrollments failed:', result.error)
+          setError(result.error)
+          setView('error')
+          return
+        }
+
+        const valid = (result.enrollments ?? []).filter(e => e.sections)
+        console.log('[Home] Valid enrollments with sections:', valid)
+        
+        if (valid.length > 0) {
+          const loaded = valid.map((e) => ({
+            id: e.id,
+            code: e.sections.name,
+            description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+            courseId: e.sections.courses?.id,
+            sectionId: e.section_id,
+          }))
+          console.log('[Home] Loaded subjects:', loaded)
+          setSubjects(loaded)
+
+          const sectionIds = loaded.map(s => s.sectionId)
+          getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+            if (success) setRecentMessages(msgs)
+          })
+        }
       }
 
       // 4. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
           code: e.sections.name,
-          description: e.sections.courses.title || e.sections.courses.code,
-          courseId: e.sections.courses.id,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
           sectionId: e.section_id,
-          schedule: null,
         }))
         setSubjects(loaded)
 
@@ -1024,15 +1147,14 @@ function Home({ session }) {
 
       // Reload enrollments
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
           code: e.sections.name,
-          description: e.sections.courses.title || e.sections.courses.code,
-          courseId: e.sections.courses.id,
+          description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code),
+          courseId: e.sections.courses?.id,
           sectionId: e.section_id,
-          schedule: null,
         }))
         setSubjects(loaded)
 
@@ -1456,6 +1578,92 @@ function Home({ session }) {
                   disabled={saving || !sectionCode.trim()}
                 >
                   {saving ? 'Joining...' : 'Join'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create section modal */}
+      {showCreateSection && (
+        <div
+          className="home__modal-overlay"
+          onClick={() => {
+            setShowCreateSection(false)
+            setSectionCode('')
+            setSectionDescription('')
+            setError('')
+          }}
+        >
+          <div
+            className="home__modal-content"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="home__modal-header">
+              <h3>Create Section</h3>
+              <button
+                type="button"
+                className="home__modal-close"
+                onClick={() => {
+                  setShowCreateSection(false)
+                  setSectionCode('')
+                  setSectionDescription('')
+                  setError('')
+                }}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="home__modal-body">
+              <p className="home__modal-message">
+                Section "{sectionCode.trim()}" not found. Create it to start a group chat for your class.
+              </p>
+              <div className="home__modal-field-group">
+                <label className="home__label">Section Code</label>
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Section code (e.g., ICS74)"
+                  value={sectionCode}
+                  onChange={(e) => setSectionCode(e.target.value)}
+                  disabled={saving}
+                />
+              </div>
+              <div className="home__modal-field-group">
+                <label className="home__label">Description</label>
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Description (e.g., Advance Database System)"
+                  value={sectionDescription}
+                  onChange={(e) => setSectionDescription(e.target.value)}
+                  disabled={saving}
+                />
+              </div>
+              {error && <p className="home__error">{error}</p>}
+              <div className="home__modal-actions">
+                <button
+                  type="button"
+                  className="home__btn home__btn--secondary"
+                  onClick={() => {
+                    setShowCreateSection(false)
+                    setSectionCode('')
+                    setSectionDescription('')
+                    setError('')
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="home__btn home__btn--primary"
+                  onClick={handleCreateSection}
+                  disabled={saving || !sectionCode.trim() || !sectionDescription.trim()}
+                >
+                  {saving ? 'Creating...' : 'Create & Join'}
                 </button>
               </div>
             </div>

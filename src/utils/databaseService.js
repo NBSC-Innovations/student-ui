@@ -605,7 +605,6 @@ export async function findSectionByCode(sectionCode) {
       .select(`
         id,
         name,
-        schedule,
         room,
         max_capacity,
         courses (
@@ -614,7 +613,7 @@ export async function findSectionByCode(sectionCode) {
           title
         )
       `)
-      .eq('name', sectionCode.trim())
+      .ilike('name', sectionCode.trim())
       .maybeSingle()
 
     if (error) throw error
@@ -627,6 +626,46 @@ export async function findSectionByCode(sectionCode) {
   } catch (error) {
     logError('Error finding section:', error)
     return { success: false, error: error.message }
+  }
+}
+
+// Create a new section (for students to create group chats)
+export async function createSection(sectionName, description = null) {
+  try {
+    const { data, error } = await supabase
+      .from('sections')
+      .insert({
+        name: sectionName.trim(),
+        description: description?.trim() || null,
+        room: null,
+        max_capacity: 50,
+      })
+      .select('id, name')
+      .single()
+
+    if (error) throw error
+
+    return { success: true, section: data }
+  } catch (error) {
+    logError('Error creating section:', error)
+    return { success: false, error: error.message }
+  }
+}
+
+// Get all courses for dropdown
+export async function getAllCourses() {
+  try {
+    const { data, error } = await supabase
+      .from('courses')
+      .select('id, code, title')
+      .order('code', { ascending: true })
+
+    if (error) throw error
+
+    return { success: true, courses: data || [] }
+  } catch (error) {
+    logError('Error fetching courses:', error)
+    return { success: false, error: error.message, courses: [] }
   }
 }
 
@@ -702,10 +741,11 @@ export async function getStudentEnrollments() {
         id,
         section_id,
         status,
-        sections!inner (
+        sections (
           id,
           name,
-          courses!inner (
+          description,
+          courses (
             id,
             code,
             title

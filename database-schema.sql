@@ -162,11 +162,12 @@ CREATE TABLE public.courses (
 
 CREATE TABLE public.sections (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    course_id UUID NOT NULL REFERENCES public.courses(id) ON DELETE CASCADE,
-    name TEXT NOT NULL, -- e.g. "BSIT 3A"
+    course_id UUID REFERENCES public.courses(id) ON DELETE CASCADE,
     instructor_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    name TEXT NOT NULL,
+    description TEXT,
     room TEXT,
-    max_capacity INTEGER DEFAULT 40,
+    max_capacity INTEGER DEFAULT 50,
     current_enrollment INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
@@ -253,6 +254,11 @@ CREATE POLICY "sections_select_enrolled_student" ON public.sections
             SELECT 1 FROM public.section_enrollments se
             WHERE se.section_id = public.sections.id AND se.student_id = auth.uid()
         )
+    );
+
+CREATE POLICY "sections_insert_student" ON public.sections
+    FOR INSERT WITH CHECK (
+        auth.role() = 'authenticated'
     );
 
 CREATE POLICY "sections_update_instructor_own" ON public.sections
