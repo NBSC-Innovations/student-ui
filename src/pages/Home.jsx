@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import '../styles/Home.css'
 import { supabase } from '../utils/supabaseClient'
 import { useToast } from '../utils/toast.jsx'
-import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection } from '../utils/databaseService'
+import { saveStudentSubjects, getStudentEnrollments, getMessages, sendMessage, editMessage, unsendMessage, pinMessage, unpinMessage, markMessageSeen, getSeenReceipts, subscribeToMessages, subscribeToSeen, getCourseMembers, subscribeToMembers, getRecentMessages, syncProfileFromAuth, updateProfile, findSectionByCode, enrollInSection, leaveSection } from '../utils/databaseService'
 
 function UploadIcon(props) {
   return (
@@ -55,7 +55,7 @@ function SendIcon(props) {
 }
 
 // ── Thread view with real-time messaging ─────────────────────────────────
-function ThreadView({ subject, onBack }) {
+function ThreadView({ subject, onBack, onLeave }) {
   const [messages, setMessages]         = useState([])
   const [text, setText]                 = useState('')
   const [sending, setSending]           = useState(false)
@@ -69,6 +69,7 @@ function ThreadView({ subject, onBack }) {
   const [seenMap, setSeenMap]           = useState({})
   const [members, setMembers]           = useState([])   // enrolled students
   const [viewingMember, setViewingMember] = useState(null)  // member profile being viewed
+  const [showLeaveModal, setShowLeaveModal] = useState(false)
   const bottomRef  = useRef(null)
   const inputRef   = useRef(null)
 
@@ -80,26 +81,26 @@ function ThreadView({ subject, onBack }) {
       uid = user?.id
     })
 
-    getMessages(subject.courseId).then(({ success, messages: msgs }) => {
+    getMessages(subject.sectionId).then(({ success, messages: msgs }) => {
       if (success) setMessages(msgs)
     })
 
-    getSeenReceipts(subject.courseId).then(({ receipts }) => {
+    getSeenReceipts(subject.sectionId).then(({ receipts }) => {
       if (receipts) buildSeenMap(receipts)
     })
 
     // Load members
-    getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+    getCourseMembers(subject.sectionId).then(({ members: m }) => setMembers(m))
 
     // Real-time: new & updated messages
     const msgChannel = subscribeToMessages(
-      subject.courseId,
+      subject.sectionId,
       (newMsg) => setMessages(prev => [...prev, newMsg]),
       (updated) => setMessages(prev => prev.map(m => m.id === updated.id ? { ...m, ...updated } : m))
     )
 
     // Real-time: seen receipts
-    const seenChannel = subscribeToSeen(subject.courseId, (receipt) => {
+    const seenChannel = subscribeToSeen(subject.sectionId, (receipt) => {
       setSeenMap(prev => {
         const existing = prev[receipt.message_id] || []
         if (existing.find(r => r.user_id === receipt.user_id)) return prev
@@ -108,8 +109,8 @@ function ThreadView({ subject, onBack }) {
     })
 
     // Real-time: enrollment changes (someone joins/leaves)
-    const memberChannel = subscribeToMembers(subject.courseId, () => {
-      getCourseMembers(subject.courseId).then(({ members: m }) => setMembers(m))
+    const memberChannel = subscribeToMembers(subject.sectionId, () => {
+      getCourseMembers(subject.sectionId).then(({ members: m }) => setMembers(m))
     })
 
     return () => {
@@ -117,7 +118,7 @@ function ThreadView({ subject, onBack }) {
       seenChannel.unsubscribe()
       memberChannel.unsubscribe()
     }
-  }, [subject.courseId])
+  }, [subject.sectionId])
 
   // ── Mark messages as seen when they appear ──────────────────────────────
   useEffect(() => {
@@ -162,7 +163,7 @@ function ThreadView({ subject, onBack }) {
     setSending(true)
     setText('')
     setReplyTo(null)
-    const result = await sendMessage(subject.courseId, trimmed, replyTo?.id ?? null)
+    const result = await sendMessage(subject.sectionId, trimmed, replyTo?.id ?? null)
     if (!result.success) setText(trimmed)
     setSending(false)
     inputRef.current?.focus()
@@ -355,6 +356,14 @@ function ThreadView({ subject, onBack }) {
             <span className="home__gc-code">{subject.code || 'Untitled'}</span>
             <span className="home__gc-desc">{subject.description}</span>
           </div>
+          <button
+            type="button"
+            className="home__thread-leave-btn"
+            onClick={() => setShowLeaveModal(true)}
+            title="Leave section"
+          >
+            Leave
+          </button>
           <button type="button"
             className={`home__netiquette-toggle ${showNetiquette ? 'home__netiquette-toggle--active' : ''}`}
             onClick={() => setShowNetiquette(v => !v)} title="Netiquette Guidelines">
@@ -568,6 +577,55 @@ function ThreadView({ subject, onBack }) {
           </div>
         )}
 
+        {/* Leave confirmation modal */}
+        {showLeaveModal && (
+          <div
+            className="home__modal-overlay"
+            onClick={() => setShowLeaveModal(false)}
+          >
+            <div
+              className="home__modal-content home__modal-content--danger"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="home__modal-header">
+                <h3>Leave Group Chat</h3>
+                <button
+                  type="button"
+                  className="home__modal-close"
+                  onClick={() => setShowLeaveModal(false)}
+                  aria-label="Close"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="home__modal-body">
+                <p className="home__modal-message">
+                  Are you sure you want to leave <strong>{subject.code}</strong>? You will no longer receive messages from this group chat.
+                </p>
+                <div className="home__modal-actions">
+                  <button
+                    type="button"
+                    className="home__btn home__btn--secondary"
+                    onClick={() => setShowLeaveModal(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="home__btn home__btn--danger"
+                    onClick={() => {
+                      setShowLeaveModal(false)
+                      onLeave && onLeave(subject.courseId, subject.code)
+                    }}
+                  >
+                    Leave
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <form className="home__thread-input" onSubmit={handleSend}>
           <input
             ref={inputRef}
@@ -614,6 +672,7 @@ function Home({ session }) {
   const [studentName, setStudentName] = useState('')
   const [academicTerm, setAcademicTerm] = useState('') // Combined AY + Semester
   const [sectionCode, setSectionCode] = useState('')
+  const [showJoinInput, setShowJoinInput] = useState(false)
   const [subjects, setSubjects] = useState([])
   const [recentMessages, setRecentMessages] = useState([])
   const [activeThread, setActiveThread] = useState(null)
@@ -627,7 +686,14 @@ function Home({ session }) {
     let cancelled = false
 
     const loadEnrollments = async () => {
-      await syncProfileFromAuth()
+      const syncResult = await syncProfileFromAuth()
+      
+      // If session expired, sign out
+      if (!syncResult.success && syncResult.error?.includes('Session expired')) {
+        await supabase.auth.signOut()
+        window.location.href = '/'
+        return
+      }
 
       const result = await getStudentEnrollments()
       if (cancelled) return
@@ -636,6 +702,12 @@ function Home({ session }) {
 
       if (!result.success) {
         console.error('[Home] enrollment fetch failed:', result.error)
+        // If auth error, sign out
+        if (result.error?.includes('does not exist') || result.error?.includes('403')) {
+          await supabase.auth.signOut()
+          window.location.href = '/'
+          return
+        }
         if (!cancelled) setView('prompt')
         return
       }
@@ -797,10 +869,7 @@ function Home({ session }) {
         return
       }
 
-      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(
-        section.id,
-        section.courses.id
-      )
+      const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(section.id)
 
       if (!enrollSuccess) {
         setError(enrollError || 'Failed to join section')
@@ -815,20 +884,20 @@ function Home({ session }) {
       }
 
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.courses.title || e.sections.courses.code,
+          courseId: e.sections.courses.id,
+          sectionId: e.section_id,
+          schedule: null,
         }))
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
       }
@@ -875,10 +944,7 @@ function Home({ session }) {
         }
 
         // Enroll in section
-        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(
-          section.id,
-          section.courses.id
-        )
+        const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(section.id)
 
         if (enrollSuccess && !alreadyEnrolled) {
           joinedSections.push(section.name)
@@ -894,20 +960,20 @@ function Home({ session }) {
 
       // 4. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
-      const valid = (fresh.enrollments ?? []).filter(e => e.courses?.sections)
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
       if (fresh.success && valid.length > 0) {
         const loaded = valid.map((e) => ({
           id: e.id,
-          code: e.courses.sections?.name || e.courses.code,
-          description: e.courses.title || e.courses.code,
-          courseId: e.course_id,
-          sectionId: e.courses.sections?.id,
-          schedule: e.courses.sections?.schedule || e.courses.schedule || null,
+          code: e.sections.name,
+          description: e.sections.courses.title || e.sections.courses.code,
+          courseId: e.sections.courses.id,
+          sectionId: e.section_id,
+          schedule: null,
         }))
         setSubjects(loaded)
 
-        const courseIds = loaded.map(s => s.courseId)
-        getRecentMessages(courseIds).then(({ success, messages: msgs }) => {
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
           if (success) setRecentMessages(msgs)
         })
       }
@@ -941,6 +1007,50 @@ function Home({ session }) {
   const backToChats = () => {
     setActiveThread(null)
     setView('chats')
+  }
+
+  const handleLeaveSection = async (sectionId, code) => {
+    setSaving(true)
+    try {
+      const { success, error } = await leaveSection(sectionId)
+
+      if (!success) {
+        toast.error(error || 'Failed to leave section')
+        setSaving(false)
+        return
+      }
+
+      toast.success(`Left ${code} successfully`)
+
+      // Reload enrollments
+      const fresh = await getStudentEnrollments()
+      const valid = (fresh.enrollments ?? []).filter(e => e.sections?.courses)
+      if (fresh.success && valid.length > 0) {
+        const loaded = valid.map((e) => ({
+          id: e.id,
+          code: e.sections.name,
+          description: e.sections.courses.title || e.sections.courses.code,
+          courseId: e.sections.courses.id,
+          sectionId: e.section_id,
+          schedule: null,
+        }))
+        setSubjects(loaded)
+
+        const sectionIds = loaded.map(s => s.sectionId)
+        getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+          if (success) setRecentMessages(msgs)
+        })
+      } else {
+        setSubjects([])
+        setRecentMessages([])
+        setView('prompt')
+      }
+    } catch (err) {
+      console.error('Error leaving section:', err)
+      toast.error('Failed to leave section')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const formatRelativeTime = (iso) => {
@@ -1222,17 +1332,24 @@ function Home({ session }) {
         <div className="home__chats">
           <div className="home__chats-header">
             <h2 className="home__title">Your Sections</h2>
-            <button type="button" className="home__reupload" onClick={startOver}>
-              Re-upload COR
-            </button>
+            <div className="home__chats-actions">
+              <button type="button" className="home__reupload" onClick={() => setShowJoinInput(true)}>
+                Join Section
+              </button>
+              <button type="button" className="home__reupload" onClick={startOver}>
+                Re-upload COR
+              </button>
+            </div>
           </div>
+
+          {error && <p className="home__error">{error}</p>}
 
           {subjects.length === 0 ? (
             <p className="home__empty">No sections found.</p>
           ) : (
             <div className="home__gc-list">
               {subjects.map((subject) => {
-                const recentMsg = recentMessages.find(m => m.course_id === subject.courseId)
+                const recentMsg = recentMessages.find(m => m.section_id === subject.sectionId)
                 return (
                   <button
                     key={subject.id}
@@ -1269,7 +1386,81 @@ function Home({ session }) {
         <ThreadView
           subject={activeThread}
           onBack={backToChats}
+          onLeave={handleLeaveSection}
         />
+      )}
+
+      {/* Join section modal */}
+      {showJoinInput && (
+        <div
+          className="home__modal-overlay"
+          onClick={() => {
+            setShowJoinInput(false)
+            setSectionCode('')
+            setError('')
+          }}
+        >
+          <div
+            className="home__modal-content"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="home__modal-header">
+              <h3>Join Section</h3>
+              <button
+                type="button"
+                className="home__modal-close"
+                onClick={() => {
+                  setShowJoinInput(false)
+                  setSectionCode('')
+                  setError('')
+                }}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="home__modal-body">
+              <p className="home__modal-message">
+                Enter the section code provided by your instructor to join their group chat.
+              </p>
+              <div className="home__modal-field-group">
+                <input
+                  type="text"
+                  className="home__input"
+                  placeholder="Section code (e.g., BSIT 3A)"
+                  value={sectionCode}
+                  onChange={(e) => setSectionCode(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
+                  disabled={saving}
+                  autoFocus
+                />
+              </div>
+              {error && <p className="home__error">{error}</p>}
+              <div className="home__modal-actions">
+                <button
+                  type="button"
+                  className="home__btn home__btn--secondary"
+                  onClick={() => {
+                    setShowJoinInput(false)
+                    setSectionCode('')
+                    setError('')
+                  }}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="home__btn home__btn--primary"
+                  onClick={joinBySectionCode}
+                  disabled={saving || !sectionCode.trim()}
+                >
+                  {saving ? 'Joining...' : 'Join'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

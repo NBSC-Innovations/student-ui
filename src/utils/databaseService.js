@@ -67,8 +67,8 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
 
     // ── Step 1: Get existing enrollments to compare ────────────
     const { data: existingEnrollments, error: fetchEnrollError } = await supabase
-      .from('enrollments')
-      .select('course_id')
+      .from('section_enrollments')
+      .select('section_id')
       .eq('student_id', user.id)
 
     if (fetchEnrollError) {
@@ -78,17 +78,16 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
 
     onProgress?.({ stage: 'upsert_courses', progress: 0, total: validSubjects.length })
 
-    // ── Step 2: Batch upsert courses ────────────────
+    // ── Step 2: Find or create sections for each subject code ────────────────
     const validSubjects = subjects.filter(s => typeof s.code === 'string' && s.code.trim())
     if (validSubjects.length === 0) {
       throw new Error('No valid subjects to save')
     }
 
+    // First, ensure courses exist for the subject codes
     const courseUpserts = validSubjects.map(subject => ({
       code: subject.code.trim().toUpperCase(),
       title: subject.description?.trim() || subject.code.trim().toUpperCase(),
-      is_active: true,
-      schedule: subject.schedule ?? null,
     }))
 
     // Chunk the upsert to handle large datasets (Supabase limit ~1000-2000 rows)
@@ -115,8 +114,7 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
 
     onProgress?.({ stage: 'fetch_courses', progress: 0, total: validSubjects.length })
 
-    // Fetch all courses by codes to get IDs (handles RLS not returning data)
-    // Chunk the .in() filter to handle large code lists (Supabase limit ~1000 values)
+    // Fetch all courses by codes to get IDs
     const codes = validSubjects.map(s => s.code.trim().toUpperCase())
     const FETCH_CHUNK_SIZE = 500
     let allCourses = []
@@ -149,23 +147,73 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
       throw new Error('No courses found in database. Check if courses table is accessible.')
     }
 
-    onProgress?.({ stage: 'insert_enrollments', progress: 0, total: validSubjects.length })
-
-    // ── Step 3: Batch insert enrollments ────────────────
-    const enrollments = []
-    const errors = []
+    // Now find or create sections for each course
+    onProgress?.({ stage: 'find_sections', progress: 0, total: validSubjects.length })
+    const sectionMap = new Map()
+    const sectionErrors = []
 
     for (const subject of validSubjects) {
       const code = subject.code.trim().toUpperCase()
       const courseId = courseMap.get(code)
-
       if (!courseId) {
-        logError('[Save] Course not found:', code)
+        sectionErrors.push(code)
+        continue
+      }
+
+      // Try to find existing section with this course and name
+      const { data: existingSection, error: sectionError } = await supabase
+        .from('sections')
+        .select('id')
+        .eq('course_id', courseId)
+        .eq('name', code)
+        .maybeSingle()
+
+      if (sectionError && sectionError.code !== 'PGRST116') {
+        logError('Error finding section:', sectionError)
+        sectionErrors.push(code)
+        continue
+      }
+
+      if (existingSection) {
+        sectionMap.set(code, existingSection.id)
+      } else {
+        // Create new section
+        const { data: newSection, error: createError } = await supabase
+          .from('sections')
+          .insert({
+            course_id: courseId,
+            name: code,
+          })
+          .select('id')
+          .single()
+
+        if (createError) {
+          logError('Error creating section:', createError)
+          sectionErrors.push(code)
+          continue
+        }
+        sectionMap.set(code, newSection.id)
+      }
+      onProgress?.({ stage: 'find_sections', progress: sectionMap.size, total: validSubjects.length })
+    }
+
+    onProgress?.({ stage: 'insert_enrollments', progress: 0, total: validSubjects.length })
+
+    // ── Step 3: Batch insert section enrollments ────────────────
+    const enrollments = []
+    const errors = sectionErrors
+
+    for (const subject of validSubjects) {
+      const code = subject.code.trim().toUpperCase()
+      const sectionId = sectionMap.get(code)
+
+      if (!sectionId) {
+        logError('[Save] Section not found:', code)
         errors.push(code)
         continue
       }
 
-      enrollments.push({ student_id: user.id, course_id: courseId, status: 'active' })
+      enrollments.push({ student_id: user.id, section_id: sectionId, status: 'active' })
     }
 
     // Insert new enrollments BEFORE deleting old ones to avoid race condition
@@ -177,7 +225,7 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
       for (let i = 0; i < enrollments.length; i += ENROLL_CHUNK_SIZE) {
         const chunk = enrollments.slice(i, i + ENROLL_CHUNK_SIZE)
         const { error: chunkError } = await supabase
-          .from('enrollments')
+          .from('section_enrollments')
           .insert(chunk)
         if (chunkError) {
           enrollError = chunkError
@@ -194,12 +242,12 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
     }
 
     // Now delete old enrollments that are not in the new set
-    const newCourseIds = enrollments.map(e => e.course_id)
+    const newSectionIds = enrollments.map(e => e.section_id)
     const { error: deleteError } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .delete()
       .eq('student_id', user.id)
-      .not('course_id', 'in', `(${newCourseIds.join(',')})`)
+      .not('section_id', 'in', `(${newSectionIds.join(',')})`)
 
     if (deleteError) {
       logError('Failed to delete old enrollments:', deleteError)
@@ -211,14 +259,15 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
     const savedSubjects = validSubjects
       .filter(s => {
         const code = typeof s.code === 'string' ? s.code.trim().toUpperCase() : null
-        return code && courseMap.has(code)
+        return code && sectionMap.has(code)
       })
       .map(s => {
         const code = s.code.trim().toUpperCase()
         return {
           ...s,
           code,
-          courseId: courseMap.get(code)
+          courseId: courseMap.get(code),
+          sectionId: sectionMap.get(code)
         }
       })
 
@@ -237,11 +286,15 @@ export async function saveStudentSubjects(studentName, subjects, options = {}) {
   }
 }
 
-export async function getMessages(courseId) {
+export async function getMessages(sectionId) {
   try {
-    // Use RPC function to fetch messages from gc_messages
+    // Fetch messages from gc_messages for this section
     const { data, error } = await supabase
-      .rpc('fetch_course_messages', { p_course_id: courseId })
+      .from('gc_messages')
+      .select('*')
+      .eq('section_id', sectionId)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: true })
 
     if (error) throw error
 
@@ -267,19 +320,24 @@ export async function getMessages(courseId) {
   }
 }
 
-export async function sendMessage(courseId, content, replyTo = null) {
+export async function sendMessage(sectionId, content, replyTo = null) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
     if (!user) throw new Error('Not authenticated')
 
-    // Use RPC function to insert message into gc_messages
+    // Insert message into gc_messages
     const { data, error } = await supabase
-      .rpc('insert_message', {
-        p_course_id: courseId,
-        p_sender_id: user.id,
-        p_content: content
+      .from('gc_messages')
+      .insert({
+        section_id: sectionId,
+        sender_id: user.id,
+        content: content,
+        is_pinned: false,
+        is_deleted: false,
       })
+      .select()
+      .single()
 
     if (error) throw error
     return { success: true, message: data }
@@ -361,14 +419,14 @@ export async function getSeenReceipts(courseId) {
   return { success: true, receipts: [] }
 }
 
-export function subscribeToMessages(courseId, onInsert, onUpdate) {
+export function subscribeToMessages(sectionId, onInsert, onUpdate) {
   // Subscribe to gc_messages table directly
   return supabase
-    .channel(`gc_messages:${courseId}`)
+    .channel(`gc_messages:${sectionId}`)
     .on('postgres_changes',
       { event: 'INSERT', schema: 'public', table: 'gc_messages' },
       (payload) => {
-        if (payload.new.course_id === courseId) {
+        if (payload.new.section_id === sectionId) {
           onInsert(payload.new)
         }
       }
@@ -376,7 +434,7 @@ export function subscribeToMessages(courseId, onInsert, onUpdate) {
     .on('postgres_changes',
       { event: 'UPDATE', schema: 'public', table: 'gc_messages' },
       (payload) => {
-        if (payload.new.course_id === courseId) {
+        if (payload.new.section_id === sectionId) {
           onUpdate?.(payload.new)
         }
       }
@@ -389,9 +447,9 @@ export function subscribeToSeen(courseId, onSeen) {
   return { unsubscribe: () => {} }
 }
 
-// Fetch all members in a course (students + instructor)
+// Fetch all members in a section (students + instructor)
 // Returns: { success, members: [{ id, full_name, email, avatar_url, role }], total }
-export async function getCourseMembers(courseId) {
+export async function getCourseMembers(sectionId) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
@@ -399,7 +457,7 @@ export async function getCourseMembers(courseId) {
 
     // Fetch enrolled students
     const { data: enrollments, error: enrollError } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .select(`
         student_id,
         profiles (
@@ -410,7 +468,7 @@ export async function getCourseMembers(courseId) {
           role
         )
       `)
-      .eq('course_id', courseId)
+      .eq('section_id', sectionId)
       .eq('status', 'active')
 
     if (enrollError) throw enrollError
@@ -419,19 +477,19 @@ export async function getCourseMembers(courseId) {
       .map(e => ({ ...e.profiles, role: e.profiles.role || 'student' }))
       .filter(Boolean)
 
-    // Fetch course instructor
-    const { data: course, error: courseError } = await supabase
-      .from('courses')
+    // Fetch section instructor
+    const { data: section, error: sectionError } = await supabase
+      .from('sections')
       .select('instructor_id')
-      .eq('id', courseId)
+      .eq('id', sectionId)
       .single()
 
-    if (!courseError && course?.instructor_id) {
+    if (!sectionError && section?.instructor_id) {
       // Fetch instructor profile separately
       const { data: instructor, error: instructorError } = await supabase
         .from('profiles')
         .select('id, full_name, email, avatar_url, role')
-        .eq('id', course.instructor_id)
+        .eq('id', section.instructor_id)
         .single()
 
       if (!instructorError && instructor) {
@@ -449,21 +507,21 @@ export async function getCourseMembers(courseId) {
   }
 }
 
-// Subscribe to enrollment changes for a course (someone joins/leaves)
-export function subscribeToMembers(courseId, onChange) {
+// Subscribe to enrollment changes for a section (someone joins/leaves)
+export function subscribeToMembers(sectionId, onChange) {
   return supabase
-    .channel(`enrollments:${courseId}`)
+    .channel(`section_enrollments:${sectionId}`)
     .on('postgres_changes',
-      { event: '*', schema: 'public', table: 'enrollments', filter: `course_id=eq.${courseId}` },
+      { event: '*', schema: 'public', table: 'section_enrollments', filter: `section_id=eq.${sectionId}` },
       () => onChange?.()
     )
     .subscribe()
 }
 
-// Get recent messages for dashboard preview (last message per course)
-export async function getRecentMessages(courseIds) {
+// Get recent messages for dashboard preview (last message per section)
+export async function getRecentMessages(sectionIds) {
   try {
-    if (!courseIds || courseIds.length === 0) {
+    if (!sectionIds || sectionIds.length === 0) {
       return { success: true, messages: [] }
     }
 
@@ -473,35 +531,35 @@ export async function getRecentMessages(courseIds) {
         id,
         content,
         created_at,
-        course_id,
+        section_id,
         sender_id,
         is_pinned
       `)
-      .in('course_id', courseIds)
+      .in('section_id', sectionIds)
       .order('created_at', { ascending: false })
       .limit(100)
 
     if (error) throw error
 
-    // Get only the most recent message per course
-    const latestByCourse = {}
+    // Get only the most recent message per section
+    const latestBySection = {}
     data?.forEach(msg => {
-      const courseId = msg.course_id
-      if (courseId && (!latestByCourse[courseId] || new Date(msg.created_at) > new Date(latestByCourse[courseId].created_at))) {
-        latestByCourse[courseId] = { ...msg }
+      const sectionId = msg.section_id
+      if (sectionId && (!latestBySection[sectionId] || new Date(msg.created_at) > new Date(latestBySection[sectionId].created_at))) {
+        latestBySection[sectionId] = { ...msg }
       }
     })
 
-    // Fetch course info and sender profiles for each message
+    // Fetch section info and sender profiles for each message
     const messagesWithDetails = await Promise.all(
-      Object.values(latestByCourse).map(async (msg) => {
-        const [{ data: course }, { data: profile }] = await Promise.all([
-          supabase.from('courses').select('code, title').eq('id', msg.course_id).single(),
+      Object.values(latestBySection).map(async (msg) => {
+        const [{ data: section }, { data: profile }] = await Promise.all([
+          supabase.from('sections').select('id, name, courses!inner(code, title)').eq('id', msg.section_id).single(),
           supabase.from('profiles').select('full_name, role').eq('id', msg.sender_id).single()
         ])
         return {
           ...msg,
-          courses: course,
+          sections: section,
           profiles: profile
         }
       })
@@ -572,8 +630,8 @@ export async function findSectionByCode(sectionCode) {
   }
 }
 
-// Enroll student in a section (via its linked course)
-export async function enrollInSection(sectionId, courseId) {
+// Enroll student in a section
+export async function enrollInSection(sectionId) {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
     if (userError) throw userError
@@ -581,10 +639,10 @@ export async function enrollInSection(sectionId, courseId) {
 
     // Check if already enrolled
     const { data: existing, error: checkError } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .select('id')
       .eq('student_id', user.id)
-      .eq('course_id', courseId)
+      .eq('section_id', sectionId)
       .maybeSingle()
 
     if (checkError && checkError.code !== 'PGRST116') throw checkError
@@ -595,10 +653,10 @@ export async function enrollInSection(sectionId, courseId) {
 
     // Create enrollment
     const { error: enrollError } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .insert({
         student_id: user.id,
-        course_id: courseId,
+        section_id: sectionId,
         status: 'active'
       })
 
@@ -611,17 +669,17 @@ export async function enrollInSection(sectionId, courseId) {
   }
 }
 
-export async function leaveSection(courseId) {
+export async function leaveSection(sectionId) {
   try {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return { success: false, error: 'User not authenticated' }
 
-    // Delete enrollment record for this student and course
+    // Delete enrollment record for this student and section
     const { error } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .delete()
-      .eq('user_id', user.id)
-      .eq('course_id', courseId)
+      .eq('student_id', user.id)
+      .eq('section_id', sectionId)
 
     if (error) throw error
     return { success: true }
@@ -639,20 +697,18 @@ export async function getStudentEnrollments() {
     if (!user) throw new Error('Not authenticated')
 
     const { data, error } = await supabase
-      .from('enrollments')
+      .from('section_enrollments')
       .select(`
         id,
-        course_id,
+        section_id,
         status,
-        courses (
+        sections!inner (
           id,
-          code,
-          title,
-          schedule,
-          sections (
+          name,
+          courses!inner (
             id,
-            name,
-            room
+            code,
+            title
           )
         )
       `)
@@ -674,8 +730,15 @@ export async function getStudentEnrollments() {
 export async function syncProfileFromAuth() {
   try {
     const { data: { user }, error: userError } = await supabase.auth.getUser()
-    if (userError) throw userError
-    if (!user) throw new Error('Not authenticated')
+    if (userError) {
+      logError('[Profile] Auth error:', userError)
+      // If user doesn't exist in auth, return gracefully
+      if (userError.message?.includes('does not exist') || userError.status === 403) {
+        return { success: false, error: 'Session expired. Please sign in again.' }
+      }
+      throw userError
+    }
+    if (!user) return { success: false, error: 'Not authenticated' }
 
     log('[Profile] Auth user metadata:', user.user_metadata)
     log('[Profile] Auth email:', user.email)
@@ -691,8 +754,11 @@ export async function syncProfileFromAuth() {
 
     log('[Profile] Current profile:', profile)
 
-    // Always try to get a better name from auth metadata
-    const authName = user.user_metadata?.full_name || user.user_metadata?.name || user.user_metadata?.given_name
+    // Always try to get a better name from auth metadata with fallbacks
+    const authName = user.user_metadata?.full_name ||
+                    user.user_metadata?.name ||
+                    `${user.user_metadata?.given_name || ''} ${user.user_metadata?.family_name || ''}`.trim() ||
+                    user.user_metadata?.given_name
     const authAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture
 
     // If auth has a name, use it (even if profile exists)
@@ -706,7 +772,7 @@ export async function syncProfileFromAuth() {
                        (authName && profile.full_name !== authName) ||
                        (authAvatar && profile.avatar_url !== authAvatar)
 
-    if (needsUpdate) {
+    if (needsUpdate && profile) {
       const updateData = {
         full_name: newName,
         avatar_url: newAvatar,
@@ -714,25 +780,12 @@ export async function syncProfileFromAuth() {
 
       log('[Profile] Update data:', updateData)
 
-      if (!profile) {
-        // Create profile if it doesn't exist
-        const { error: createError } = await supabase
-          .from('profiles')
-          .insert({
-            id: user.id,
-            email: user.email,
-            ...updateData,
-            role: 'student',
-          })
-        if (createError) throw createError
-      } else {
-        // Update existing profile
-        const { error: updateError } = await supabase
-          .from('profiles')
-          .update(updateData)
-          .eq('id', user.id)
-        if (updateError) throw updateError
-      }
+      // Update existing profile (trigger handles creation)
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update(updateData)
+        .eq('id', user.id)
+      if (updateError) throw updateError
 
       log('[Profile] Synced from auth metadata')
     }

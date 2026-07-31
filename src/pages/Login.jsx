@@ -52,20 +52,34 @@ function Alert({ type, message, onClose }) {
 function Login() {
   // 'signin' | 'signup' | 'forgot' | 'forgot-sent'
   const [mode, setMode] = useState('signin')
-
-  const [email, setEmail]             = useState('')
-  const [emailError, setEmailError]   = useState('')   // inline field error
-  const [password, setPassword]       = useState('')
-  const [showPass, setShowPass]       = useState(false)
-  const [loading, setLoading]         = useState(false)
-
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [alert, setAlert] = useState(null)
   const toast = useToast()
-
-  // alert state (for non-email errors inside the card)
-  const [alert, setAlert] = useState(null) // { type, message }
 
   const showAlert = (type, message) => setAlert({ type, message })
   const clearAlert = () => setAlert(null)
+
+  /* ── Google sign in ───────────────────────────────────────────────────── */
+  const handleGoogleSignIn = async () => {
+    clearAlert()
+    setLoading(true)
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/`,
+          skipBrowserRedirect: false
+        }
+      })
+      if (error) throw error
+      // OAuth redirect happens automatically
+    } catch (err) {
+      showAlert('error', err.message || 'Could not sign in with Google.')
+      setLoading(false)
+    }
+  }
 
   const resetTo = (nextMode) => {
     clearAlert()
@@ -108,20 +122,6 @@ function Login() {
     if (!validateEmail()) return
     setLoading(true)
     try {
-      // Check if user exists in profiles table first (using RPC to bypass RLS)
-      const { data: userExists, error: checkError } = await supabase
-        .rpc('check_user_exists', { p_email: email })
-
-      if (checkError) {
-        console.error('[SignIn] check_user_exists error:', checkError)
-      }
-
-      if (!userExists) {
-        showAlert('error', 'User account not found. Please sign up first.')
-        setLoading(false)
-        return
-      }
-
       const { data, error } = await supabase.auth.signInWithPassword({ email, password })
       console.log('[SignIn] data:', JSON.stringify(data))
       console.log('[SignIn] error:', error)
@@ -146,31 +146,16 @@ function Login() {
       // onAuthStateChange in App.jsx handles the redirect
     } catch (err) {
       let msg = err.message || 'Invalid email or password.'
-      if (msg.toLowerCase().includes('invalid login credentials'))
-        msg = 'Incorrect email or password.'
-      else if (msg.toLowerCase().includes('email not confirmed'))
+      
+      if (msg.toLowerCase().includes('invalid login credentials')) {
+        msg = 'This account uses Google sign-in. Please use "Sign in with Google" button below.'
+      } else if (msg.toLowerCase().includes('email not confirmed')) {
         msg = 'Please confirm your email first. Check your inbox for the confirmation link.'
+      } else if (msg.toLowerCase().includes('user not found')) {
+        msg = 'Account not found. Please sign up first.'
+      }
+      
       showAlert('error', msg)
-      setLoading(false)
-    }
-  }
-
-  /* ── Google sign in ───────────────────────────────────────────────────── */
-  const handleGoogleSignIn = async () => {
-    clearAlert()
-    setLoading(true)
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/`,
-          skipBrowserRedirect: false
-        }
-      })
-      if (error) throw error
-      // OAuth redirect happens automatically
-    } catch (err) {
-      showAlert('error', err.message || 'Could not sign in with Google.')
       setLoading(false)
     }
   }
@@ -184,57 +169,50 @@ function Login() {
     setLoading(true)
     try {
       console.log('[SignUp] attempting with:', email)
-      const { data, error } = await supabase.auth.signUp({ email, password })
+      
+      const { data, error } = await supabase.auth.signUp({ 
+        email, 
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/`
+        }
+      })
       console.log('[SignUp] data:', JSON.stringify(data))
       console.log('[SignUp] error:', JSON.stringify(error))
 
       if (error) throw error
 
       if (data?.user && data.user.identities?.length === 0) {
-        showAlert('info', `An account for ${email} already exists. Try signing in.`)
+        // User already exists - check if they have Google
+        showAlert('info', `An account for ${email} already exists. If you signed up with Google, please sign in with Google first, then add a password in your Profile.`)
         setLoading(false)
         return
       }
 
       if (data?.user) {
-        // Create profile record
-        const { error: profileError } = await supabase
-          .from('profiles')
-          .insert({
-            id: data.user.id,
-            email: data.user.email,
-            role: 'student',
-            student_id: email.split('@')[0] // Use numeric part as student ID
-          })
-
-        if (profileError) {
-          console.error('[SignUp] profile creation error:', profileError)
-          showAlert('error', 'Account created but profile setup failed. Please contact administrator.')
-          setLoading(false)
-          return
-        }
+        // Profile is created automatically by the database trigger
       }
 
       if (data?.session) {
-        // Confirmation off — immediately signed in
+        // Email confirmation off - immediately signed in
         showAlert('success', 'Account created! Signing you in…')
+        toast.success('Account created successfully!')
         // App.jsx onAuthStateChange handles redirect
       } else if (data?.user) {
-        // Confirmation on — need to verify email
+        // Email confirmation on - need to verify email
         showAlert('success', `Check ${email} for a confirmation link to activate your account.`)
-        resetTo('signin')
-      } else {
-        showAlert('error', 'Unexpected response from server. Please try again.')
+        toast.success('Confirmation email sent!')
       }
     } catch (err) {
-      console.error('[SignUp] caught error:', err)
-      let msg = err.message || 'Could not create account. Please try again.'
-      if (err.status === 500 || msg.includes('500')) {
-        msg = 'Server error — try disabling "Confirm email" in Supabase Auth settings, or check your Supabase project status.'
+      console.error('[SignUp] error:', err)
+      let msg = err.message || 'Failed to create account.'
+      if (msg.toLowerCase().includes('user already registered')) {
+        msg = 'An account with this email already exists. If you signed up with Google, please sign in with Google first, then add a password in your Profile.'
       }
       showAlert('error', msg)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   /* ── Forgot password ─────────────────────────────────────────────────── */
@@ -399,7 +377,7 @@ function Login() {
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                 />
               </svg>
-              Continue with Google
+              {isSignUp ? 'Sign up with Google' : 'Sign in with Google'}
             </button>
           )}
         </form>

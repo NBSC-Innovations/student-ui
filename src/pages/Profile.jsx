@@ -41,6 +41,11 @@ function Profile({ session }) {
   const [saveMsg, setSaveMsg]       = useState('')
   const [enrollments, setEnrollments] = useState([])
   const [loadingEnroll, setLoadingEnroll] = useState(true)
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [identities, setIdentities] = useState([])
+  const [localPasswordSet, setLocalPasswordSet] = useState(false)
 
   const departments = {
     IBM: 'Institute of Business Management (IBM)',
@@ -67,6 +72,11 @@ function Profile({ session }) {
   // Load profile from DB and auto-sync avatar from metadata
   useEffect(() => {
     if (!user) return
+    
+    // Load identities
+    setIdentities(user.identities || [])
+    setLocalPasswordSet(user.identities?.some(i => i.provider === 'email') || false)
+    
     supabase
       .from('profiles')
       .select('full_name, student_id, department, avatar_url')
@@ -125,6 +135,56 @@ function Profile({ session }) {
       setTimeout(() => setSaveMsg(''), 3000)
     }
   }
+
+  const handleSetPassword = async () => {
+    setPasswordError('')
+    if (newPassword.length < 8) {
+      setPasswordError('Password must be at least 8 characters')
+      return
+    }
+
+    try {
+      const { error } = await supabase.auth.updateUser({
+        password: newPassword
+      })
+      
+      if (error) throw error
+      
+      setShowPasswordModal(false)
+      setNewPassword('')
+      setLocalPasswordSet(true)
+      setSaveMsg('Password set successfully! You can now sign in with either Google or your password.')
+      setTimeout(() => setSaveMsg(''), 5000)
+      
+      // Refresh user data from database to get updated identities
+      await new Promise(resolve => setTimeout(resolve, 500)) // Wait for Supabase to update
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        setIdentities(user.identities || [])
+      }
+    } catch (err) {
+      setPasswordError(err.message || 'Failed to set password')
+    }
+  }
+
+  const handleLinkGoogle = async () => {
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/`,
+          skipBrowserRedirect: false
+        }
+      })
+      if (error) throw error
+    } catch (err) {
+      setSaveMsg('Failed to link Google account: ' + err.message)
+      setTimeout(() => setSaveMsg(''), 5000)
+    }
+  }
+
+  const hasGoogle = identities.some(i => i.provider === 'google')
+  const hasPassword = localPasswordSet || identities.some(i => i.provider === 'email')
 
   return (
     <div className="profile">
@@ -196,16 +256,103 @@ function Profile({ session }) {
               ? <select className="profile__input" value={department}
                   onChange={e => setDepartment(e.target.value)}>
                   <option value="">Select department</option>
-                  {Object.entries(departments).map(([code, name]) => (
-                    <option key={code} value={code}>{name}</option>
-                  ))}
+                  <option value="IBM">IBM - Institute of Business Management</option>
+                  <option value="ICS">ICS - Institute for Computer Studies</option>
+                  <option value="ITE">ITE - Institute of Teacher Education</option>
                 </select>
-              : <span className="profile__value">{department ? departments[department] : <span className="profile__empty">Not set</span>}</span>
+              : <span className="profile__value">
+                  {department ? departments[department] || department : <span className="profile__empty">Not set</span>}
+                </span>
             }
           </div>
-
         </div>
       </div>
+
+      {/* ── Account linking ── */}
+      <div className="profile__section">
+        <h3 className="profile__section-title">Sign-in Methods</h3>
+        <div className="profile__fields">
+          <div className="profile__field">
+            <label className="profile__label">Google</label>
+            <span className={`profile__value ${hasGoogle ? 'profile__value--active' : 'profile__value--inactive'}`}>
+              {hasGoogle ? '✓ Connected' : 'Not connected'}
+            </span>
+          </div>
+          
+          <div className="profile__field">
+            <label className="profile__label">Password</label>
+            <span className={`profile__value ${hasPassword ? 'profile__value--active' : 'profile__value--inactive'}`}>
+              {hasPassword ? '✓ Set' : 'Not set'}
+            </span>
+          </div>
+
+          {!hasPassword && (
+            <button
+              type="button"
+              className="profile__link-btn"
+              onClick={() => setShowPasswordModal(true)}
+            >
+              Add password to sign in with email
+            </button>
+          )}
+          
+          {!hasGoogle && (
+            <button
+              type="button"
+              className="profile__link-btn"
+              onClick={handleLinkGoogle}
+            >
+              Link Google account
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Password modal ── */}
+      {showPasswordModal && (
+        <div className="profile__modal-overlay" onClick={() => setShowPasswordModal(false)}>
+          <div className="profile__modal" onClick={e => e.stopPropagation()}>
+            <h3 className="profile__modal-title">Set Password</h3>
+            <p className="profile__modal-desc">Add a password to sign in with your email instead of Google.</p>
+            
+            <div className="profile__modal-field">
+              <label className="profile__label">New Password</label>
+              <input
+                type="password"
+                className="profile__input"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="At least 8 characters"
+              />
+            </div>
+            
+            {passwordError && (
+              <div className="profile__msg profile__msg--error">{passwordError}</div>
+            )}
+            
+            <div className="profile__modal-actions">
+              <button
+                type="button"
+                className="profile__modal-btn profile__modal-btn--cancel"
+                onClick={() => {
+                  setShowPasswordModal(false)
+                  setNewPassword('')
+                  setPasswordError('')
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="profile__modal-btn profile__modal-btn--confirm"
+                onClick={handleSetPassword}
+              >
+                Set Password
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Enrolled subjects ── */}
       <div className="profile__section">
@@ -225,6 +372,7 @@ function Profile({ session }) {
                 <div className="profile__subject-info">
                   <span className="profile__subject-code">{e.courses?.code}</span>
                   <span className="profile__subject-title">{e.courses?.title}</span>
+                  <span className="profile__subject-description">{e.courses?.description}</span>
                 </div>
                 <span className="profile__subject-badge">{e.status}</span>
               </div>

@@ -228,6 +228,16 @@
   background: #e2e8f0;
 }
 
+.home__btn--danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+.home__btn--danger:hover:not(:disabled) {
+  background: #b91c1c;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+}
+
 /* ── Spinner ── */
 .home__spinner {
   width: 40px;
@@ -438,6 +448,11 @@
   margin: 0;
 }
 
+.home__chats-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .home__chats-tabs {
   display: flex;
   gap: 8px;
@@ -485,6 +500,22 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.home__join-section-input {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: center;
+}
+
+.home__join-section-input .home__input {
+  flex: 1;
+}
+
+.home__join-section-input .home__btn {
+  padding: 10px 16px;
+  font-size: 13px;
 }
 
 .home__gc-item {
@@ -580,6 +611,37 @@
 
 .home__gc-item--full {
   padding: 18px 20px;
+}
+
+/* ── GC item wrapper for leave button ── */
+.home__gc-item-wrapper {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.home__gc-leave-btn {
+  padding: 0 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.home__gc-leave-btn:hover:not(:disabled) {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.home__gc-leave-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ── Dashboard view ── */
@@ -737,6 +799,25 @@
 
 .home__thread-back:hover {
   background: var(--nbsc-blue-100);
+}
+
+.home__thread-leave-btn {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-family: inherit;
+  margin-left: auto;
+}
+
+.home__thread-leave-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
 }
 
 .home__thread-title {
@@ -1668,4 +1749,29 @@
   font-size: 13px;
   color: #475569;
   margin: 2px 0;
+}
+
+.home__modal-message {
+  font-size: 14px;
+  color: var(--text-h);
+  line-height: 1.5;
+  margin: 0 0 20px;
+}
+
+.home__modal-field-group {
+  margin-bottom: 16px;
+}
+
+.home__modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.home__modal-actions .home__btn {
+  min-width: 100px;
+}
+
+.home__modal-content--danger {
+  border: 2px solid #fecaca;
 }
