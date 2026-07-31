@@ -9,6 +9,7 @@ import {
   unsendMessage,
   pinMessage,
   unpinMessage,
+  markMessageSeen,
   subscribeToMessages,
   subscribeToSeen,
   subscribeToMembers,
