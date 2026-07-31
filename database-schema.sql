@@ -137,6 +137,7 @@ CREATE TABLE public.profiles (
     is_admin BOOLEAN NOT NULL DEFAULT false,
     student_id TEXT UNIQUE,
     department TEXT, -- descriptive only, never used for section access
+    has_password BOOLEAN NOT NULL DEFAULT false, -- tracks if user has set email password
     created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL
 );

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../utils/supabaseClient'
 import { getStudentEnrollments } from '../utils/databaseService'
+import { useToast } from '../utils/toast.jsx'
 import '../styles/Profile.css'
 
 function EditIcon(props) {
@@ -46,6 +47,7 @@ function Profile({ session }) {
   const [passwordError, setPasswordError] = useState('')
   const [identities, setIdentities] = useState([])
   const [localPasswordSet, setLocalPasswordSet] = useState(false)
+  const toast = useToast()
 
   const departments = {
     IBM: 'Institute of Business Management (IBM)',
@@ -73,13 +75,19 @@ function Profile({ session }) {
   useEffect(() => {
     if (!user) return
     
-    // Load identities
-    setIdentities(user.identities || [])
-    setLocalPasswordSet(user.identities?.some(i => i.provider === 'email') || false)
+    // Load identities and check for password
+    const checkPasswordStatus = async () => {
+      const { data: { user: refreshedUser } } = await supabase.auth.getUser()
+      if (refreshedUser) {
+        setIdentities(refreshedUser.identities || [])
+      }
+    }
+    
+    checkPasswordStatus()
     
     supabase
       .from('profiles')
-      .select('full_name, student_id, department, avatar_url')
+      .select('full_name, student_id, department, avatar_url, has_password')
       .eq('id', user.id)
       .single()
       .then(({ data }) => {
@@ -88,6 +96,8 @@ function Profile({ session }) {
           // Always use email extraction for student ID
           setStudentId(emailStudentId)
           setDepartment(data.department || '')
+          // Check has_password flag from database
+          setLocalPasswordSet(data.has_password || false)
 
           // Auto-sync avatar from metadata if missing or different
           const metadataAvatar = user.user_metadata?.avatar_url || user.user_metadata?.picture
@@ -144,25 +154,42 @@ function Profile({ session }) {
     }
 
     try {
-      const { error } = await supabase.auth.updateUser({
+      console.log('[Password] Attempting to set password...')
+      const { data, error } = await supabase.auth.updateUser({
         password: newPassword
       })
       
-      if (error) throw error
+      console.log('[Password] Update response:', { data, error })
+      
+      if (error) {
+        console.error('[Password] Error setting password:', error)
+        throw error
+      }
+      
+      console.log('[Password] Password update succeeded, data:', data)
+      
+      // Store password flag in profiles table since Supabase doesn't add email provider to identities
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .update({ has_password: true })
+        .eq('id', session.user.id)
+      
+      if (profileError) {
+        console.error('[Password] Failed to update profile flag:', profileError)
+      } else {
+        console.log('[Password] Profile flag updated successfully')
+      }
       
       setShowPasswordModal(false)
       setNewPassword('')
+      // Set password as true immediately since the update succeeded
       setLocalPasswordSet(true)
       setSaveMsg('Password set successfully! You can now sign in with either Google or your password.')
+      toast.success('Password added successfully!')
       setTimeout(() => setSaveMsg(''), 5000)
       
-      // Refresh user data from database to get updated identities
-      await new Promise(resolve => setTimeout(resolve, 500)) // Wait for Supabase to update
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        setIdentities(user.identities || [])
-      }
     } catch (err) {
+      console.error('[Password] Failed to set password:', err)
       setPasswordError(err.message || 'Failed to set password')
     }
   }
@@ -282,7 +309,7 @@ function Profile({ session }) {
           <div className="profile__field">
             <label className="profile__label">Password</label>
             <span className={`profile__value ${hasPassword ? 'profile__value--active' : 'profile__value--inactive'}`}>
-              {hasPassword ? '✓ Set' : 'Not set'}
+              {hasPassword ? '✓ Set' : ''}
             </span>
           </div>
 

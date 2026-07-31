@@ -1366,6 +1366,7 @@ function Home({ session }) {
       // 2. Process each subject section code
       const joinedSections = []
       const notFoundSections = []
+      const newSectionIds = []
 
       for (const subject of subjects) {
         const code = subject.code?.trim().toUpperCase()
@@ -1390,6 +1391,9 @@ function Home({ session }) {
             const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(newSection.id)
             if (enrollSuccess && !alreadyEnrolled) {
               joinedSections.push(newSection.name)
+              newSectionIds.push(newSection.id)
+            } else if (enrollSuccess && alreadyEnrolled) {
+              newSectionIds.push(newSection.id)
             }
           } else {
             console.error(`Failed to create section ${code}:`, createError)
@@ -1406,9 +1410,26 @@ function Home({ session }) {
         if (enrollSuccess && !alreadyEnrolled) {
           joinedSections.push(section.name)
         }
+        newSectionIds.push(section.id)
       }
 
-      // 3. Feedback notifications
+      // 3. Remove old enrollments that are not in the new COR
+      if (newSectionIds.length > 0) {
+        setLoadingMessage('Updating your enrollments...')
+        const { error: deleteError } = await supabase
+          .from('section_enrollments')
+          .delete()
+          .eq('student_id', session.user.id)
+          .not('section_id', 'in', `(${newSectionIds.join(',')})`)
+
+        if (deleteError) {
+          console.error('Failed to delete old enrollments:', deleteError)
+        } else {
+          console.log('Successfully removed old enrollments')
+        }
+      }
+
+      // 4. Feedback notifications
       if (joinedSections.length > 0) {
         toast.success(`Joined ${joinedSections.length} section${joinedSections.length !== 1 ? 's' : ''}: ${joinedSections.join(', ')}`)
       } else if (notFoundSections.length === 0) {
@@ -1445,7 +1466,7 @@ function Home({ session }) {
         }
       }
 
-      // 4. Reload enrollments and navigate back to chats
+      // 5. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
       const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
