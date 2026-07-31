@@ -876,14 +876,16 @@ function Home({ session }) {
       return
     }
 
+    const upperCaseCode = sectionCode.trim().toUpperCase()
     setSaving(true)
     setError('')
 
     try {
-      const { success, section, error: findError } = await findSectionByCode(sectionCode.trim())
+      const { success, section, error: findError } = await findSectionByCode(upperCaseCode)
 
       if (!success) {
-        // Section doesn't exist - show create option
+        // Section doesn't exist - show create option with uppercase code
+        setSectionCode(upperCaseCode)
         setSaving(false)
         setShowCreateSection(true)
         return
@@ -943,12 +945,13 @@ function Home({ session }) {
       return
     }
 
+    const upperCaseCode = sectionCode.trim().toUpperCase()
     setSaving(true)
     setError('')
 
     try {
       const { success, section, error: createError } = await createSection(
-        sectionCode.trim(),
+        upperCaseCode,
         sectionDescription.trim()
       )
 
@@ -1024,20 +1027,35 @@ function Home({ session }) {
       const notFoundSections = []
 
       for (const subject of subjects) {
-        const code = subject.code?.trim()
+        const code = subject.code?.trim().toUpperCase()
         if (!code) continue
 
         const { success, section, error: findError } = await findSectionByCode(code)
         
-        // If section is not found in database
-        if (!success || !section?.courses) {
-          console.error(`Failed to find section ${code}:`, findError)
-          notFoundSections.push(code)
-          toast.error(`Subject code "${code}" not found. Please check and try again.`) // <--- TOAST FOR NOT FOUND
+        // If section is not found in database, create it
+        if (!success) {
+          console.log(`Section ${code} not found, creating it...`)
+          const { success: createSuccess, section: newSection, error: createError } = await createSection(
+            code,
+            subject.description?.trim() || ''
+          )
+          
+          if (createSuccess && newSection) {
+            console.log(`Section ${code} created successfully`)
+            // Enroll in the newly created section
+            const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(newSection.id)
+            if (enrollSuccess && !alreadyEnrolled) {
+              joinedSections.push(newSection.name)
+            }
+          } else {
+            console.error(`Failed to create section ${code}:`, createError)
+            notFoundSections.push(code)
+            toast.error(`Failed to create section "${code}": ${createError || 'Unknown error'}`)
+          }
           continue
         }
 
-        // Enroll in section
+        // Enroll in existing section
         const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(section.id)
 
         if (enrollSuccess && !alreadyEnrolled) {
