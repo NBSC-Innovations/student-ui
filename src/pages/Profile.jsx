@@ -370,9 +370,9 @@ function Profile({ session }) {
                   <BookIcon width={16} height={16} />
                 </div>
                 <div className="profile__subject-info">
-                  <span className="profile__subject-code">{e.courses?.code}</span>
-                  <span className="profile__subject-title">{e.courses?.title}</span>
-                  <span className="profile__subject-description">{e.courses?.description}</span>
+                  <span className="profile__subject-code">{e.sections?.courses?.code}</span>
+                  <span className="profile__subject-title">{e.sections?.courses?.title}</span>
+                  <span className="profile__subject-description">{e.sections?.description}</span>
                 </div>
                 <span className="profile__subject-badge">{e.status}</span>
               </div>

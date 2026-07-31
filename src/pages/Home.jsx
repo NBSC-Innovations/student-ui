@@ -1194,7 +1194,42 @@ function Home({ session }) {
       }
 
       if (!section?.courses) {
-        setError('Section has no linked course. Please contact your instructor.')
+        // Section exists but has no linked course - still allow joining
+        setLoadingMessage('Joining section...')
+        const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(section.id)
+
+        if (!enrollSuccess) {
+          setError(enrollError || 'Failed to join section')
+          setSaving(false)
+          return
+        }
+
+        if (alreadyEnrolled) {
+          toast.success('You are already enrolled in this section')
+        } else {
+          toast.success(`Successfully joined ${section.name}`)
+        }
+
+        const fresh = await getStudentEnrollments()
+        const valid = (fresh.enrollments ?? []).filter(e => e.sections)
+        if (fresh.success && valid.length > 0) {
+          const loaded = valid.map((e) => ({
+            id: e.id,
+            code: e.sections.name,
+            description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code || 'No course linked'),
+            courseId: e.sections.courses?.id,
+            sectionId: e.section_id,
+          }))
+          setSubjects(loaded)
+
+          const sectionIds = loaded.map(s => s.sectionId)
+          getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+            if (success) setRecentMessages(msgs)
+          })
+        }
+
+        setSectionCode('')
+        setView('chats')
         setSaving(false)
         return
       }
@@ -1549,7 +1584,7 @@ function Home({ session }) {
               className="home__input"
               placeholder="Enter section code"
               value={sectionCode}
-              onChange={(e) => setSectionCode(e.target.value)}
+              onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
               onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
               disabled={saving}
             />
@@ -1880,7 +1915,7 @@ function Home({ session }) {
                   className="home__input"
                   placeholder="Section code (e.g., BSIT 3A)"
                   value={sectionCode}
-                  onChange={(e) => setSectionCode(e.target.value)}
+                  onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
                   onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
                   disabled={saving}
                   autoFocus
@@ -1956,7 +1991,7 @@ function Home({ session }) {
                   className="home__input"
                   placeholder="Section code (e.g., ICS74)"
                   value={sectionCode}
-                  onChange={(e) => setSectionCode(e.target.value)}
+                  onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
                   disabled={saving}
                 />
               </div>
