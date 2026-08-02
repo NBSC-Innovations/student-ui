@@ -137,6 +137,7 @@ CREATE TABLE public.profiles (
     is_admin BOOLEAN NOT NULL DEFAULT false,
     student_id TEXT UNIQUE,
     department TEXT, -- descriptive only, never used for section access
+    has_password BOOLEAN NOT NULL DEFAULT false, -- tracks if user has set email password
     created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL,
     updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW()) NOT NULL
 );
@@ -230,6 +231,9 @@ ALTER TABLE public.gc_messages ENABLE ROW LEVEL SECURITY;
 -- PROFILES
 CREATE POLICY "profiles_select_own" ON public.profiles
     FOR SELECT USING (id = auth.uid());
+
+CREATE POLICY "profiles_select_authenticated" ON public.profiles
+    FOR SELECT USING (auth.role() = 'authenticated');
 
 CREATE POLICY "profiles_insert_own" ON public.profiles
     FOR INSERT WITH CHECK (id = auth.uid());

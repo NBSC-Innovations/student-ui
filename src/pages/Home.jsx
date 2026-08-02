@@ -9,6 +9,7 @@ import {
   unsendMessage,
   pinMessage,
   unpinMessage,
+  markMessageSeen,
   subscribeToMessages,
   subscribeToSeen,
   subscribeToMembers,
@@ -1194,7 +1195,42 @@ function Home({ session }) {
       }
 
       if (!section?.courses) {
-        setError('Section has no linked course. Please contact your instructor.')
+        // Section exists but has no linked course - still allow joining
+        setLoadingMessage('Joining section...')
+        const { success: enrollSuccess, alreadyEnrolled, error: enrollError } = await enrollInSection(section.id)
+
+        if (!enrollSuccess) {
+          setError(enrollError || 'Failed to join section')
+          setSaving(false)
+          return
+        }
+
+        if (alreadyEnrolled) {
+          toast.success('You are already enrolled in this section')
+        } else {
+          toast.success(`Successfully joined ${section.name}`)
+        }
+
+        const fresh = await getStudentEnrollments()
+        const valid = (fresh.enrollments ?? []).filter(e => e.sections)
+        if (fresh.success && valid.length > 0) {
+          const loaded = valid.map((e) => ({
+            id: e.id,
+            code: e.sections.name,
+            description: e.sections.description || (e.sections.courses?.title || e.sections.courses?.code || 'No course linked'),
+            courseId: e.sections.courses?.id,
+            sectionId: e.section_id,
+          }))
+          setSubjects(loaded)
+
+          const sectionIds = loaded.map(s => s.sectionId)
+          getRecentMessages(sectionIds).then(({ success, messages: msgs }) => {
+            if (success) setRecentMessages(msgs)
+          })
+        }
+
+        setSectionCode('')
+        setView('chats')
         setSaving(false)
         return
       }
@@ -1331,6 +1367,7 @@ function Home({ session }) {
       // 2. Process each subject section code
       const joinedSections = []
       const notFoundSections = []
+      const newSectionIds = []
 
       for (const subject of subjects) {
         const code = subject.code?.trim().toUpperCase()
@@ -1355,6 +1392,9 @@ function Home({ session }) {
             const { success: enrollSuccess, alreadyEnrolled } = await enrollInSection(newSection.id)
             if (enrollSuccess && !alreadyEnrolled) {
               joinedSections.push(newSection.name)
+              newSectionIds.push(newSection.id)
+            } else if (enrollSuccess && alreadyEnrolled) {
+              newSectionIds.push(newSection.id)
             }
           } else {
             console.error(`Failed to create section ${code}:`, createError)
@@ -1371,9 +1411,26 @@ function Home({ session }) {
         if (enrollSuccess && !alreadyEnrolled) {
           joinedSections.push(section.name)
         }
+        newSectionIds.push(section.id)
       }
 
-      // 3. Feedback notifications
+      // 3. Remove old enrollments that are not in the new COR
+      if (newSectionIds.length > 0) {
+        setLoadingMessage('Updating your enrollments...')
+        const { error: deleteError } = await supabase
+          .from('section_enrollments')
+          .delete()
+          .eq('student_id', session.user.id)
+          .not('section_id', 'in', `(${newSectionIds.join(',')})`)
+
+        if (deleteError) {
+          console.error('Failed to delete old enrollments:', deleteError)
+        } else {
+          console.log('Successfully removed old enrollments')
+        }
+      }
+
+      // 4. Feedback notifications
       if (joinedSections.length > 0) {
         toast.success(`Joined ${joinedSections.length} section${joinedSections.length !== 1 ? 's' : ''}: ${joinedSections.join(', ')}`)
       } else if (notFoundSections.length === 0) {
@@ -1410,7 +1467,7 @@ function Home({ session }) {
         }
       }
 
-      // 4. Reload enrollments and navigate back to chats
+      // 5. Reload enrollments and navigate back to chats
       const fresh = await getStudentEnrollments()
       const valid = (fresh.enrollments ?? []).filter(e => e.sections)
       if (fresh.success && valid.length > 0) {
@@ -1549,7 +1606,7 @@ function Home({ session }) {
               className="home__input"
               placeholder="Enter section code"
               value={sectionCode}
-              onChange={(e) => setSectionCode(e.target.value)}
+              onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
               onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
               disabled={saving}
             />
@@ -1880,7 +1937,7 @@ function Home({ session }) {
                   className="home__input"
                   placeholder="Section code (e.g., BSIT 3A)"
                   value={sectionCode}
-                  onChange={(e) => setSectionCode(e.target.value)}
+                  onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
                   onKeyPress={(e) => e.key === 'Enter' && joinBySectionCode()}
                   disabled={saving}
                   autoFocus
@@ -1956,7 +2013,7 @@ function Home({ session }) {
                   className="home__input"
                   placeholder="Section code (e.g., ICS74)"
                   value={sectionCode}
-                  onChange={(e) => setSectionCode(e.target.value)}
+                  onChange={(e) => setSectionCode(e.target.value.toUpperCase())}
                   disabled={saving}
                 />
               </div>
